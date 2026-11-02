@@ -1,3 +1,6 @@
+#if !canImport(Darwin)
+@preconcurrency import Dispatch
+#endif
 import Foundation
 
 // MARK: - Public
@@ -20,22 +23,14 @@ public func databaseQuestionMarks(count: Int) -> String {
     repeatElement("?", count: count).joined(separator: ",")
 }
 
-/// This protocol is an implementation detail of GRDB. Don't use it.
-///
-/// :nodoc:
-public protocol _OptionalProtocol {
-    associatedtype Wrapped
-}
-
-/// This conformance is an implementation detail of GRDB. Don't rely on it.
-///
-/// :nodoc:
-extension Optional: _OptionalProtocol { }
-
-#if swift(>=5.6) && canImport(_Concurrency)
-public typealias GRDBSendable = Swift.Sendable
+#if compiler(>=6.2)
+/// A synonym for the standard `SendableMetatype` protocol in Swift 6.2,
+/// and `Any` in previous compiler versions.
+public typealias GRDBSendableMetatype = SendableMetatype
 #else
-public typealias GRDBSendable = Any
+/// A synonym for the standard `SendableMetatype` protocol in Swift 6.2,
+/// and `Any` in previous compiler versions.
+public typealias GRDBSendableMetatype = Any
 #endif
 
 // MARK: - Internal
@@ -49,9 +44,9 @@ func GRDBPrecondition(
     file: StaticString = #file,
     line: UInt = #line)
 {
-    /// Custom precondition function which aims at solving
-    /// <https://bugs.swift.org/browse/SR-905> and
-    /// <https://github.com/groue/GRDB.swift/issues/37>
+    // Custom precondition function which aims at solving
+    // <https://bugs.swift.org/browse/SR-905> and
+    // <https://github.com/groue/GRDB.swift/issues/37>
     if !condition() {
         fatalError(message(), file: file, line: line)
     }
@@ -85,8 +80,8 @@ extension Dictionary {
 }
 
 extension DispatchQueue {
-    private static var mainKey: DispatchSpecificKey<()> = {
-        let key = DispatchSpecificKey<()>()
+    private static let mainKey: DispatchSpecificKey<Void> = {
+        let key = DispatchSpecificKey<Void>()
         DispatchQueue.main.setSpecific(key: key, value: ())
         return key
     }()
@@ -107,7 +102,7 @@ extension Sequence {
 }
 
 /// Makes sure the `finally` function is executed even if `execute` throws, and
-/// rethrows the eventual first thrown error.
+/// rethrows the first thrown error, if any.
 ///
 /// Usage:
 ///
@@ -130,20 +125,35 @@ func throwingFirstError<T>(execute: () throws -> T, finally: () throws -> Void) 
             firstError = error
         }
     }
-    if let firstError = firstError {
+    if let firstError {
         throw firstError
     }
     return result!
 }
 
-struct PrintOutputStream: TextOutputStream {
+struct PrintOutputStream: TextOutputStream, Sendable {
     func write(_ string: String) {
         Swift.print(string)
     }
 }
 
+/// A Sendable strong reference to an object.
+///
+/// This type hides its retained object in order to provide the
+/// Sendable guarantee.
+final class StrongReference<Value: AnyObject>: @unchecked Sendable {
+    private let value: Value
+    
+    init(_ value: Value) {
+        self.value = value
+    }
+}
+
 /// Concatenates two functions
-func concat(_ rhs: (() -> Void)?, _ lhs: (() -> Void)?) -> (() -> Void)? {
+func concat(
+    _ rhs: (@Sendable () -> Void)?,
+    _ lhs: (@Sendable () -> Void)?
+) -> (@Sendable () -> Void)? {
     switch (rhs, lhs) {
     case let (rhs, nil):
         return rhs
@@ -158,7 +168,10 @@ func concat(_ rhs: (() -> Void)?, _ lhs: (() -> Void)?) -> (() -> Void)? {
 }
 
 /// Concatenates two functions
-func concat<T>(_ rhs: ((T) -> Void)?, _ lhs: ((T) -> Void)?) -> ((T) -> Void)? {
+func concat<T>(
+    _ rhs: (@Sendable (T) -> Void)?,
+    _ lhs: (@Sendable (T) -> Void)?
+) -> (@Sendable (T) -> Void)? {
     switch (rhs, lhs) {
     case let (rhs, nil):
         return rhs
@@ -183,7 +196,7 @@ extension NSLocking {
         return try block()
     }
     
-    // // Verbose version which helps understanding locking bugs
+    // // Verbose version which helps understand locking bugs
     // func synchronized<T>(_ message: @autoclosure () -> String = "", _ block: () throws -> T) rethrows -> T {
     //     let queueName = String(validatingUTF8: __dispatch_queue_get_label(nil))
     //     print("\(queueName ?? "n/d"): \(message()) acquiring \(self)")
@@ -197,8 +210,8 @@ extension NSLocking {
     //     return try block()
     // }
     
-    /// Performs the side effect outside of the synchronized block. This allows
-    /// avoiding deadlocks, when the side effect feedbacks.
+    /// Performs the side effect outside of the synchronized block. This avoids
+    /// deadlocks, when the side effect triggers a reentrant call.
     func synchronized(
         _ message: @autoclosure () -> String = #function,
         _ block: (inout (() -> Void)?) -> Void)
@@ -208,3 +221,7 @@ extension NSLocking {
         sideEffect?()
     }
 }
+
+#if !canImport(ObjectiveC)
+@inlinable func autoreleasepool<Result>(invoking body: () throws -> Result) rethrows -> Result { try body() }
+#endif

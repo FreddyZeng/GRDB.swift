@@ -4,98 +4,114 @@ import Combine
 import Foundation
 
 // TODO: provide concurrent apis for migrations that run @Sendable closures.
-/// A DatabaseMigrator registers and applies database migrations.
+/// A `DatabaseMigrator` registers and applies database migrations.
 ///
-/// Migrations are named blocks of SQL statements that are guaranteed to be
-/// applied in order, once and only once.
+/// For an overview of database migrations and `DatabaseMigrator` usage,
+/// see <doc:Migrations>.
 ///
-/// When a user upgrades your application, only non-applied migration are run.
+/// ## Topics
 ///
-/// Usage:
+/// ### Creating a DatabaseMigrator
 ///
-///     var migrator = DatabaseMigrator()
+/// - ``init()``
 ///
-///     // 1st migration
-///     migrator.registerMigration("createLibrary") { db in
-///         try db.create(table: "author") { t in
-///             t.autoIncrementedPrimaryKey("id")
-///             t.column("creationDate", .datetime)
-///             t.column("name", .text).notNull()
-///         }
+/// ### Registering Migrations
 ///
-///         try db.create(table: "book") { t in
-///             t.autoIncrementedPrimaryKey("id")
-///             t.column("authorId", .integer)
-///                 .notNull()
-///                 .references("author", onDelete: .cascade)
-///             t.column("title", .text).notNull()
-///         }
-///     }
+/// - ``registerMigration(_:foreignKeyChecks:migrate:)``
+/// - ``registerMigration(_:foreignKeyChecks:merging:migrate:)``
+/// - ``ForeignKeyChecks``
 ///
-///     // 2nd migration
-///     migrator.registerMigration("AddBirthYearToAuthors") { db in
-///         try db.alter(table: "author") { t
-///             t.add(column: "birthYear", .integer)
-///         }
-///     }
+/// ### Configuring a DatabaseMigrator
 ///
-///     // Migrations for future versions will be inserted here:
-///     //
-///     // // 3rd migration
-///     // migrator.registerMigration("...") { db in
-///     //     ...
-///     // }
+/// - ``eraseDatabaseOnSchemaChange``
+/// - ``disablingDeferredForeignKeyChecks()``
 ///
-///     try migrator.migrate(dbQueue)
-public struct DatabaseMigrator {
-    /// Controls how migrations handle foreign keys constraints.
-    public enum ForeignKeyChecks {
-        /// The migration runs with disabled foreign keys, until foreign keys
-        /// are checked right before changes are committed on disk.
+/// ### Migrating a Database
+///
+/// - ``asyncMigrate(_:completion:)``
+/// - ``migrate(_:)``
+/// - ``migrate(_:upTo:)``
+/// - ``migratePublisher(_:receiveOn:)``
+///
+/// ### Querying Migrations
+///
+/// - ``migrations``
+/// - ``appliedIdentifiers(_:)``
+/// - ``appliedMigrations(_:)``
+/// - ``completedMigrations(_:)``
+/// - ``hasBeenSuperseded(_:)``
+/// - ``hasCompletedMigrations(_:)``
+///
+/// ### Detecting Schema Changes
+///
+/// - ``hasSchemaChanges(_:)``
+public struct DatabaseMigrator: Sendable {
+    /// Controls how a migration handles foreign key constraints.
+    public enum ForeignKeyChecks: Sendable {
+        /// The migration runs with disabled foreign keys.
         ///
-        /// These deferred checks are not executed if the migrator comes
-        /// from `disablingDeferredForeignKeyChecks()`.
+        /// Foreign keys are checked right before changes are committed on disk,
+        /// unless the `DatabaseMigrator` is the result of
+        /// ``DatabaseMigrator/disablingDeferredForeignKeyChecks()``.
         ///
-        /// Deferred foreign key checks are necessary for migrations that
-        /// perform schema changes as described in
-        /// <https://www.sqlite.org/lang_altertable.html#making_other_kinds_of_table_schema_changes>
+        /// In this case, you can perform your own deferred foreign key checks
+        /// with ``Database/checkForeignKeys(in:in:)`` or
+        /// ``Database/checkForeignKeys()``:
+        /// 
+        /// ```swift
+        /// migrator = migrator.disablingDeferredForeignKeyChecks()
+        /// migrator.registerMigration("Partially checked migration") { db in
+        ///     ...
+        ///
+        ///     // Throws an error and stops migrations if there exists a
+        ///     // foreign key violation in the 'book' table.
+        ///     try db.checkForeignKeys(in: "book")
+        /// }
+        /// ```
         case deferred
         
-        /// The migration runs for foreign keys on.
+        /// The migration runs with enabled foreign keys.
         ///
-        /// Immediate foreign key checks are not compatible with migrations that
-        /// perform schema changes as described in
-        /// <https://www.sqlite.org/lang_altertable.html#making_other_kinds_of_table_schema_changes>
+        /// Immediate foreign key checks are NOT compatible with migrations that
+        /// recreate tables as described
+        /// in <doc:Migrations#Defining-the-Database-Schema-from-a-Migration>.
         case immediate
     }
     
-    /// When the `eraseDatabaseOnSchemaChange` flag is true, the migrator will
-    /// automatically wipe out the full database content, and recreate the whole
-    /// database from scratch, if it detects that a migration has changed its
-    /// definition.
+    /// A boolean value indicating whether the migrator recreates the whole
+    /// database from scratch if it detects a change in the definition
+    /// of migrations.
     ///
-    /// This flag can destroy your precious users' data!
+    /// - warning: This flag can destroy your precious users' data!
     ///
-    /// But it may be useful in two situations:
+    /// When true, the database migrator wipes out the full database content,
+    /// and runs all migrations from the start, if one of those conditions
+    /// is met:
     ///
-    /// 1. During application development, as you are still designing
-    ///     migrations, and the schema changes often.
+    /// - A migration has been removed, or renamed.
+    /// - A schema change is detected. A schema change is any difference in
+    ///   the `sqlite_master` table, which contains the SQL used to create
+    ///   database tables, indexes, triggers, and views.
     ///
-    ///     In this case, it is recommended that you make sure this flag does
-    ///     not ship in the distributed application, in order to avoid undesired
-    ///     data loss:
+    /// This flag is useful during application development: you are still
+    /// designing migrations, and the schema changes often.
     ///
-    ///         var migrator = DatabaseMigrator()
-    ///         #if DEBUG
-    ///         // Speed up development by nuking the database when migrations change
-    ///         migrator.eraseDatabaseOnSchemaChange = true
-    ///         #endif
+    /// It is recommended to not ship it in the distributed application, in
+    /// order to avoid undesired data loss. Use the `DEBUG`
+    /// compilation condition:
     ///
-    /// 2. When the database content can easily be recreated, such as a cache
-    ///     for some downloaded data.
+    /// ```swift
+    /// var migrator = DatabaseMigrator()
+    /// #if DEBUG
+    /// // Speed up development by nuking the database when migrations change
+    /// migrator.eraseDatabaseOnSchemaChange = true
+    /// #endif
+    /// ```
+    ///
+    /// See also ``hasSchemaChanges(_:)``.
     public var eraseDatabaseOnSchemaChange = false
     private var defersForeignKeyChecks = true
-    private var _migrations: [Migration] = []
+    private var _migrations: OrderedDictionary<String, Migration> = [:]
     
     /// A new migrator.
     public init() {
@@ -103,37 +119,41 @@ public struct DatabaseMigrator {
     
     // MARK: - Disabling Foreign Key Checks
     
-    /// Returns a migrator that will not perform deferred foreign key checks in
-    /// all newly registered migrations.
+    /// Returns a migrator that disables foreign key checks in all newly
+    /// registered migrations.
     ///
     /// The returned migrator is _unsafe_, because it no longer guarantees the
-    /// integrity of the database. It is your responsibility to register
-    /// migrations that do not break foreign key constraints.
+    /// integrity of the database. It is now _your_ responsibility to register
+    /// migrations that do not break foreign key constraints. See
+    /// ``Database/checkForeignKeys()`` and ``Database/checkForeignKeys(in:in:)``.
     ///
     /// Running migrations without foreign key checks can improve migration
     /// performance on huge databases.
     ///
     /// Example:
     ///
-    ///     var migrator = DatabaseMigrator()
-    ///     migrator.registerMigration("A") { db in
-    ///         // Runs with deferred foreign key checks
-    ///     }
-    ///     migrator.registerMigration("B", foreignKeyChecks: .immediate) { db in
-    ///         // Runs with immediate foreign key checks
-    ///     }
+    /// ```swift
+    /// var migrator = DatabaseMigrator()
+    /// migrator.registerMigration("A") { db in
+    ///     // Runs with deferred foreign key checks
+    /// }
+    /// migrator.registerMigration("B", foreignKeyChecks: .immediate) { db in
+    ///     // Runs with immediate foreign key checks
+    /// }
     ///
-    ///     migrator = migrator.disablingDeferredForeignKeyChecks()
-    ///     migrator.registerMigration("C") { db in
-    ///         // Runs with disabled foreign key checks
-    ///     }
-    ///     migrator.registerMigration("D", foreignKeyChecks: .immediate) { db in
-    ///         // Runs with immediate foreign key checks
-    ///     }
+    /// migrator = migrator.disablingDeferredForeignKeyChecks()
+    /// migrator.registerMigration("C") { db in
+    ///     // Runs without foreign key checks
+    /// }
+    /// migrator.registerMigration("D", foreignKeyChecks: .immediate) { db in
+    ///     // Runs with immediate foreign key checks
+    /// }
+    /// ```
     ///
-    /// - warning: Before using this unsafe method, try to run your migrations with
-    /// `.immediate` foreign key checks, if possible. This may enhance migration
-    /// performances, while preserving the database integrity guarantee.
+    /// - warning: Before using this unsafe method, try to register your
+    ///   migrations with the `foreignKeyChecks: .immediate` option, _if
+    ///   possible_, as in the example above. This will enhance migration
+    ///   performance, while preserving the database integrity guarantee.
     public func disablingDeferredForeignKeyChecks() -> DatabaseMigrator {
         with { $0.defersForeignKeyChecks = false }
     }
@@ -142,37 +162,159 @@ public struct DatabaseMigrator {
     
     /// Registers a migration.
     ///
-    ///     migrator.registerMigration("createAuthors") { db in
-    ///         try db.create(table: "author") { t in
-    ///             t.autoIncrementedPrimaryKey("id")
-    ///             t.column("creationDate", .datetime)
-    ///             t.column("name", .text).notNull()
-    ///         }
+    /// The registered migration is appended to the list of migrations. It
+    /// will execute after previously registered migrations.
+    ///
+    /// For example:
+    ///
+    /// ```swift
+    /// migrator.registerMigration("createAuthors") { db in
+    ///     try db.create(table: "author") { t in
+    ///         t.autoIncrementedPrimaryKey("id")
+    ///         t.column("creationDate", .datetime)
+    ///         t.column("name", .text).notNull()
     ///     }
+    /// }
+    /// ```
+    ///
+    /// Database operations are wrapped in a transaction. If they throw an
+    /// error, the transaction is rolled back, migrations are aborted, and the
+    /// error is thrown by the migrating method.
+    ///
+    /// By default, database operations run with disabled foreign keys, and
+    /// foreign keys are checked right before changes are committed on disk. You
+    /// can control this behavior with the `foreignKeyChecks` argument.
+    ///
+    /// Database operations run in the writer dispatch queue, serialized
+    /// with all database updates performed by the migrated `DatabaseWriter`.
+    ///
+    /// The `Database` argument to `migrate` is valid only during the execution
+    /// of the closure. Do not store or return the database connection for
+    /// later use.
     ///
     /// - parameters:
     ///     - identifier: The migration identifier.
-    ///     - foreignKeyChecks: This parameter is ignored if the database has
-    ///       not enabled foreign keys.
+    ///     - foreignKeyChecks: This parameter is ignored if the database
+    ///       ``Configuration`` has disabled foreign keys.
     ///
     ///       The default `.deferred` checks have the migration run with
     ///       disabled foreign keys, until foreign keys are checked right before
     ///       changes are committed on disk. These deferred checks are not
-    ///       executed if the migrator comes
-    ///       from `disablingDeferredForeignKeyChecks()`.
+    ///       executed if the migrator is the result of
+    ///       ``disablingDeferredForeignKeyChecks()``.
     ///
     ///       The `.immediate` checks have the migration run with foreign
-    ///       keys enabled.
-    ///
-    ///       Only use `.immediate` if you are sure that the migration does not
-    ///       perform schema changes described in
+    ///       keys enabled. Make sure you only use `.immediate` if the migration
+    ///       does not perform schema changes described in
     ///       <https://www.sqlite.org/lang_altertable.html#making_other_kinds_of_table_schema_changes>
-    ///     - block: The migration block that performs SQL statements.
-    /// - precondition: No migration with the same same as already been registered.
+    ///     - migrate: A closure that performs database operations.
+    /// - precondition: No migration with the same identifier has already
+    ///   been registered.
     public mutating func registerMigration(
         _ identifier: String,
         foreignKeyChecks: ForeignKeyChecks = .deferred,
-        migrate: @escaping (Database) throws -> Void)
+        migrate: @escaping @Sendable (Database) throws -> Void)
+    {
+        registerMigration(identifier, foreignKeyChecks: foreignKeyChecks, merging: []) { db, ids in
+            precondition(ids.isEmpty)
+            try migrate(db)
+        }
+    }
+    
+    /// Registers a merged migration.
+    ///
+    /// Like migrations registered with ``registerMigration(_:foreignKeyChecks:migrate:)``,
+    /// the merged migration is appended to the list of migrations. It
+    /// will execute after previously registered migrations.
+    ///
+    /// A merged migration merges and replaces a set of migrations defined
+    /// in a previous version of the application. For example, to merge the
+    /// migrations "v1", "v2" and "v3", redefine the "v3" migration so that
+    /// it merges "v1" and "v2", as in the example below.
+    ///
+    /// The second argument of the `migrate` closure is the subset of merged
+    /// migrations that have already been applied when the merged
+    /// migration runs.
+    ///
+    /// ```swift
+    /// // Old code
+    /// migrator.registerMigration("v1") { db in
+    ///     // Apply schema version 1
+    /// }
+    /// migrator.registerMigration("v2") { db in
+    ///     // Apply schema version 2
+    /// }
+    /// migrator.registerMigration("v3") { db in
+    ///     // Apply schema version 3
+    /// }
+    ///
+    /// // New code:
+    /// // - Migrations v1 and v2 are deleted.
+    /// // - Migration v3 is redefined and merges v1 and v2:
+    /// migrator.registerMigration("v3", merging: ["v1", "v2"]) { db, appliedIDs in
+    ///     if !appliedIDs.contains("v1") {
+    ///         // Apply schema version 1
+    ///     }
+    ///     if !appliedIDs.contains("v2") {
+    ///         // Apply schema version 2
+    ///     }
+    ///     // Apply schema version 3
+    /// }
+    /// ```
+    ///
+    /// In the above sample code, the merged migration is named after the
+    /// last one of the merged set. You can also give it a brand new name,
+    /// as in the alternative below. Notice the different logic in the
+    /// migration code.
+    ///
+    /// **In all cases avoid naming the merged migration after the first
+    /// elements in the merged set** (`v1` or `v2` in our example).
+    ///
+    /// ```swift
+    /// // Alternative new code:
+    /// // - Migrations v1, v2 and v3 are deleted.
+    /// // - The new migration v3-new merges v1, v2 and v3:
+    /// migrator.registerMigration("v3-new", merging: ["v1", "v2", "v3"]) { db, appliedIDs in
+    ///     if !appliedIDs.contains("v1") {
+    ///         // Apply schema version 1
+    ///     }
+    ///     if !appliedIDs.contains("v2") {
+    ///         // Apply schema version 2
+    ///     }
+    ///     if !appliedIDs.contains("v3") {
+    ///         // Apply schema version 3
+    ///     }
+    /// }
+    /// ```
+    ///
+    /// - parameters:
+    ///     - identifier: The migration identifier.
+    ///     - mergedIdentifiers: A set of previous migration identifiers
+    ///       that are merged in this migration.
+    ///     - foreignKeyChecks: This parameter is ignored if the database
+    ///       ``Configuration`` has disabled foreign keys.
+    ///
+    ///       The default `.deferred` checks have the migration run with
+    ///       disabled foreign keys, until foreign keys are checked right before
+    ///       changes are committed on disk. These deferred checks are not
+    ///       executed if the migrator is the result of
+    ///       ``disablingDeferredForeignKeyChecks()``.
+    ///
+    ///       The `.immediate` checks have the migration run with foreign
+    ///       keys enabled. Make sure you only use `.immediate` if the migration
+    ///       does not perform schema changes described in
+    ///       <https://www.sqlite.org/lang_altertable.html#making_other_kinds_of_table_schema_changes>
+    ///     - migrate: A closure that performs database operations. The
+    ///       first argument is a database connection. The second argument
+    ///       is the set of previous migrations that has been applied when
+    ///       the merged migration runs.
+    /// - precondition: No migration with the same identifier has already
+    ///   been registered.
+    public mutating func registerMigration(
+        _ identifier: String,
+        foreignKeyChecks: ForeignKeyChecks = .deferred,
+        merging mergedIdentifiers: Set<String> = [],
+        migrate: @escaping @Sendable (_ db: Database, _ appliedIdentifiers: Set<String>) throws -> Void)
     {
         let migrationChecks: Migration.ForeignKeyChecks
         switch foreignKeyChecks {
@@ -185,62 +327,163 @@ public struct DatabaseMigrator {
         case .immediate:
             migrationChecks = .immediate
         }
-        registerMigration(Migration(identifier: identifier, foreignKeyChecks: migrationChecks, migrate: migrate))
+        
+        // Remove the migration identifier from the list of merged identifiers.
+        // Arguably, the semantics are ambiguous. And raising a fatal error
+        // is a high price when we can just fix the input.
+        var mergedIdentifiers = mergedIdentifiers
+        mergedIdentifiers.remove(identifier)
+        
+        registerMigration(Migration(
+            identifier: identifier,
+            mergedIdentifiers: mergedIdentifiers,
+            foreignKeyChecks: migrationChecks,
+            migrate: migrate))
     }
     
     // MARK: - Applying Migrations
     
-    /// Iterate migrations in the same order as they were registered. If a
-    /// migration has not yet been applied, its block is executed in
-    /// a transaction.
+    /// Runs all unapplied migrations, in the same order as they
+    /// were registered.
     ///
-    /// - parameter writer: A DatabaseWriter (DatabaseQueue or DatabasePool)
-    ///   where migrations should apply.
-    /// - throws: An eventual error thrown by the registered migration blocks.
-    public func migrate(_ writer: DatabaseWriter) throws {
-        guard let lastMigration = _migrations.last else {
+    /// - parameter writer: A DatabaseWriter.
+    /// - throws: The error thrown by the first failed migration.
+    public func migrate(_ writer: any DatabaseWriter) throws {
+        guard let lastMigrationIdentifier = _migrations.keys.last else {
             return
         }
-        try migrate(writer, upTo: lastMigration.identifier)
+        try migrate(writer, upTo: lastMigrationIdentifier)
     }
     
-    /// Iterate migrations in the same order as they were registered, up to the
-    /// provided target. If a migration has not yet been applied, its block is
-    /// executed in a transaction.
+    /// Runs all unapplied migrations, in the same order as they
+    /// were registered, up to the target migration identifier (included).
     ///
-    /// - parameter writer: A DatabaseWriter (DatabaseQueue or DatabasePool)
-    ///   where migrations should apply.
-    /// - parameter targetIdentifier: The identifier of a registered migration.
-    /// - throws: An eventual error thrown by the registered migration blocks.
-    public func migrate(_ writer: DatabaseWriter, upTo targetIdentifier: String) throws {
+    /// - precondition: `targetIdentifier` is the identifier of a
+    ///   registered migration.
+    ///
+    /// - precondition: The database has not already been migrated beyond the
+    ///   target migration.
+    ///
+    /// - parameter writer: A DatabaseWriter.
+    /// - parameter targetIdentifier: A migration identifier.
+    /// - throws: The error thrown by the first failed migration.
+    public func migrate(_ writer: any DatabaseWriter, upTo targetIdentifier: String) throws {
         try writer.barrierWriteWithoutTransaction { db in
             try migrate(db, upTo: targetIdentifier)
         }
     }
     
-    /// Iterate migrations in the same order as they were registered. If a
-    /// migration has not yet been applied, its block is executed in
-    /// a transaction.
+    /// Schedules unapplied migrations for execution, and returns immediately.
     ///
-    /// - parameter writer: A DatabaseWriter (DatabaseQueue or DatabasePool)
-    ///   where migrations should apply.
-    /// - parameter completion: A closure that is called in a protected dispatch
-    ///   queue that can write in the database, with the eventual
-    ///   migration error.
+    /// - parameter writer: A DatabaseWriter.
+    /// - parameter completion: A function that can access the database. Its
+    ///   argument is a `Result` that provides a connection to the migrated
+    ///   database, or the failure that prevented the migrations
+    ///   from succeeding.
     public func asyncMigrate(
-        _ writer: DatabaseWriter,
-        completion: @escaping (Database, Error?) -> Void)
+        _ writer: any DatabaseWriter,
+        completion: @escaping @Sendable (Result<Database, Error>) -> Void)
     {
-        writer.asyncBarrierWriteWithoutTransaction { db in
+        writer.asyncBarrierWriteWithoutTransaction { dbResult in
             do {
-                if let lastMigration = self._migrations.last {
-                    try self.migrate(db, upTo: lastMigration.identifier)
+                let db = try dbResult.get()
+                if let lastMigrationIdentifier = _migrations.keys.last {
+                    try migrate(db, upTo: lastMigrationIdentifier)
                 }
-                completion(db, nil)
+                completion(.success(db))
             } catch {
-                completion(db, error)
+                completion(.failure(error))
             }
         }
+    }
+    
+    // MARK: - Detecting Schema Changes
+    
+    /// Returns a boolean value indicating whether the migrator detects a
+    /// change in the definition of migrations.
+    ///
+    /// The result is true if one of those conditions is met:
+    ///
+    /// - A migration has been removed, or renamed.
+    /// - There exists any difference in the `sqlite_master` table, which
+    ///   contains the SQL used to create database tables, indexes,
+    ///   triggers, and views.
+    ///
+    /// This method supports the ``eraseDatabaseOnSchemaChange`` option.
+    /// When `eraseDatabaseOnSchemaChange` does not exactly fit your
+    /// needs, you can implement it manually as below:
+    ///
+    /// ```swift
+    /// #if DEBUG
+    /// // Speed up development by nuking the database when migrations change
+    /// if try dbQueue.read(migrator.hasSchemaChanges) {
+    ///     try dbQueue.erase()
+    ///     // Perform other needed logic
+    /// }
+    /// #endif
+    /// try migrator.migrate(dbQueue)
+    /// ```
+    ///
+    public func hasSchemaChanges(_ db: Database) throws -> Bool {
+        let appliedIdentifiers = try appliedIdentifiers(db)
+        let knownIdentifiers = Set(_migrations.keys)
+        if !appliedIdentifiers.isSubset(of: knownIdentifiers) {
+            // Database contains an unknown migration
+            return true
+        }
+        
+        if let lastAppliedIdentifier = _migrations.keys
+            .last(where: { appliedIdentifiers.contains($0) })
+        {
+            // Some migrations were already applied.
+            //
+            // Let's migrate a temporary database up to the same
+            // level, and compare the database schemas. If they
+            // differ, we'll return true
+            let tmpSchema = try {
+                // Make sure the temporary database is configured
+                // just as the migrated database
+                var tmpConfig = db.configuration
+                tmpConfig.readonly = false // We need write access
+                tmpConfig.targetQueue = nil // Avoid deadlocks
+                tmpConfig.writeTargetQueue = nil // Avoid deadlocks
+                tmpConfig.label = "GRDB.DatabaseMigrator.temporary"
+                
+                // Create the temporary database on disk, just in
+                // case migrations would involve a lot of data.
+                //
+                // SQLite supports temporary on-disk databases, but
+                // those are not guaranteed to accept the
+                // preparation functions provided by the user.
+                //
+                // See https://github.com/groue/GRDB.swift/issues/931
+                // for an issue created by such databases.
+                //
+                // So let's create a "regular" temporary database:
+                let tmpURL = URL(fileURLWithPath: NSTemporaryDirectory())
+                    .appendingPathComponent(ProcessInfo.processInfo.globallyUniqueString)
+                defer {
+                    try? FileManager().removeItem(at: tmpURL)
+                }
+                let tmpDatabase = try DatabaseQueue(path: tmpURL.path, configuration: tmpConfig)
+                return try tmpDatabase.writeWithoutTransaction { db in
+                    try runMigrations(db, upTo: lastAppliedIdentifier)
+                    return try db.schema(.main)
+                }
+            }()
+            
+            // Only compare user objects
+            func isUserObject(_ object: SchemaObject) -> Bool {
+                !Database.isSQLiteInternalTable(object.name) && !Database.isGRDBInternalTable(object.name)
+            }
+            let tmpUserSchema = tmpSchema.filter(isUserObject)
+            let userSchema = try db.schema(.main).filter(isUserObject)
+            if userSchema != tmpUserSchema {
+                return true
+            }
+        }
+        
+        return false
     }
     
     // MARK: - Querying Migrations
@@ -248,27 +491,23 @@ public struct DatabaseMigrator {
     /// The list of registered migration identifiers, in the same order as they
     /// have been registered.
     public var migrations: [String] {
-        _migrations.map(\.identifier)
+        _migrations.keys
     }
     
     /// Returns the identifiers of registered and applied migrations, in the
     /// order of registration.
     ///
-    /// See also `appliedIdentifiers(_:)`.
-    ///
     /// - parameter db: A database connection.
-    /// - throws: An eventual database error.
+    /// - throws: A ``DatabaseError`` whenever an SQLite error occurs.
     public func appliedMigrations(_ db: Database) throws -> [String] {
         let appliedIdentifiers = try self.appliedIdentifiers(db)
-        return _migrations.map { $0.identifier }.filter { appliedIdentifiers.contains($0) }
+        return _migrations.keys.filter { appliedIdentifiers.contains($0) }
     }
     
     /// Returns the applied migration identifiers, even unregistered ones.
     ///
-    /// See also `appliedMigrations(_:)`.
-    ///
     /// - parameter db: A database connection.
-    /// - throws: An eventual database error.
+    /// - throws: A ``DatabaseError`` whenever an SQLite error occurs.
     public func appliedIdentifiers(_ db: Database) throws -> Set<String> {
         do {
             return try String.fetchSet(db, sql: "SELECT identifier FROM grdb_migrations")
@@ -281,89 +520,127 @@ public struct DatabaseMigrator {
         }
     }
     
-    /// Returns the identifiers of completed migrations, of which all previous
-    /// migrations have been applied.
+    /// Returns the identifiers of registered and completed migrations, in the
+    /// order of registration.
+    ///
+    /// A migration is completed if and only if all previous migrations have
+    /// been applied.
     ///
     /// - parameter db: A database connection.
-    /// - throws: An eventual database error.
+    /// - throws: A ``DatabaseError`` whenever an SQLite error occurs.
     public func completedMigrations(_ db: Database) throws -> [String] {
         let appliedIdentifiers = try appliedMigrations(db)
-        let knownIdentifiers = _migrations.map(\.identifier)
+        let knownIdentifiers = _migrations.keys
         return zip(appliedIdentifiers, knownIdentifiers)
             .prefix(while: { (applied: String, known: String) in applied == known })
             .map { $0.0 }
     }
     
-    /// Returns true if all migrations are applied.
+    /// A boolean value indicating whether all registered migrations, and only
+    /// registered migrations, have been applied.
     ///
     /// - parameter db: A database connection.
-    /// - throws: An eventual database error.
+    /// - throws: A ``DatabaseError`` whenever an SQLite error occurs.
     public func hasCompletedMigrations(_ db: Database) throws -> Bool {
-        try completedMigrations(db).last == _migrations.last?.identifier
+        try completedMigrations(db).last == _migrations.keys.last
     }
     
-    /// Returns whether database contains unknown migration
-    /// identifiers, which is likely the sign that the database
-    /// has migrated further than the migrator itself supports.
+    /// A boolean value indicating whether the database refers to
+    /// unregistered migrations.
+    ///
+    /// When the result is true, the database has likely been migrated by a
+    /// more recent migrator.
     ///
     /// - parameter db: A database connection.
-    /// - throws: An eventual database error.
+    /// - throws: A ``DatabaseError`` whenever an SQLite error occurs.
     public func hasBeenSuperseded(_ db: Database) throws -> Bool {
         let appliedIdentifiers = try self.appliedIdentifiers(db)
-        let knownIdentifiers = _migrations.map(\.identifier)
+        let knownIdentifiers = _migrations.keys
         return appliedIdentifiers.contains { !knownIdentifiers.contains($0) }
     }
     
     // MARK: - Non public
     
-    private mutating func registerMigration(_ migration: Migration) {
-        GRDBPrecondition(
-            !_migrations.map({ $0.identifier }).contains(migration.identifier),
-            "already registered migration: \(String(reflecting: migration.identifier))")
-        _migrations.append(migration)
+    private struct Execution {
+        enum Mode {
+            case run(mergedIdentifiers: Set<String>)
+            case deleteMergedIdentifiers
+        }
+        
+        var migration: Migration
+        var mode: Mode
     }
     
-    /// Returns unapplied migration identifier,
-    private func unappliedMigrations(upTo targetIdentifier: String, appliedIdentifiers: [String]) -> [Migration] {
-        var expectedMigrations: [Migration] = []
-        for migration in _migrations {
-            expectedMigrations.append(migration)
-            if migration.identifier == targetIdentifier {
+    private mutating func registerMigration(_ migration: Migration) {
+        GRDBPrecondition(
+            _migrations[migration.identifier] == nil,
+            "already registered migration: \(String(reflecting: migration.identifier))")
+        _migrations.appendValue(migration, forKey: migration.identifier)
+    }
+    
+    /// Returns unapplied migration executions
+    private func unappliedExecutions(upTo targetIdentifier: String, appliedIdentifiers: Set<String>) -> [Execution] {
+        var executions: [Execution] = []
+        var foundTarget = false
+        
+        for (identifier, migration) in _migrations {
+            if appliedIdentifiers.contains(identifier) {
+                if !migration.mergedIdentifiers.isDisjoint(with: appliedIdentifiers) {
+                    // Migration is applied, but we have some merged identifiers to delete
+                    executions.append(Execution(migration: migration, mode: .deleteMergedIdentifiers))
+                }
+            } else {
+                // Migration is not applied yet.
+                let appliedMergedIdentifiers = migration.mergedIdentifiers.intersection(appliedIdentifiers)
+                executions.append(Execution(
+                    migration: migration,
+                    mode: .run(mergedIdentifiers: appliedMergedIdentifiers)
+                ))
+            }
+            
+            if identifier == targetIdentifier {
+                foundTarget = true
                 break
             }
         }
         
         // targetIdentifier must refer to a registered migration
         GRDBPrecondition(
-            expectedMigrations.last?.identifier == targetIdentifier,
+            foundTarget,
             "undefined migration: \(String(reflecting: targetIdentifier))")
         
-        return expectedMigrations.filter { !appliedIdentifiers.contains($0.identifier) }
+        return executions
     }
     
     private func runMigrations(_ db: Database, upTo targetIdentifier: String) throws {
         try db.execute(sql: "CREATE TABLE IF NOT EXISTS grdb_migrations (identifier TEXT NOT NULL PRIMARY KEY)")
-        let appliedIdentifiers = try self.appliedMigrations(db)
         
         // Subsequent migration must not be applied
-        if let targetIndex = _migrations.firstIndex(where: { $0.identifier == targetIdentifier }),
-           let lastAppliedIdentifier = appliedIdentifiers.last,
-           let lastAppliedIndex = _migrations.firstIndex(where: { $0.identifier == lastAppliedIdentifier }),
+        let appliedMigrations = try self.appliedMigrations(db) // Only known ids
+        if let targetIndex = _migrations.keys.firstIndex(of: targetIdentifier),
+           let lastAppliedMigration = appliedMigrations.last,
+           let lastAppliedIndex = _migrations.keys.firstIndex(of: lastAppliedMigration),
            targetIndex < lastAppliedIndex
         {
             fatalError("database is already migrated beyond migration \(String(reflecting: targetIdentifier))")
         }
         
-        let unappliedMigrations = self.unappliedMigrations(
+        let appliedIdentifiers = try self.appliedIdentifiers(db) // All ids, even unknown ones
+        let unappliedExecutions = self.unappliedExecutions(
             upTo: targetIdentifier,
             appliedIdentifiers: appliedIdentifiers)
         
-        if unappliedMigrations.isEmpty {
+        if unappliedExecutions.isEmpty {
             return
         }
         
-        for migration in unappliedMigrations {
-            try migration.run(db)
+        for execution in unappliedExecutions {
+            switch execution.mode {
+            case .run(let mergedIdentifiers):
+                try execution.migration.run(db, mergedIdentifiers: mergedIdentifiers)
+            case .deleteMergedIdentifiers:
+                try execution.migration.deleteMergedIdentifiers(db)
+            }
         }
     }
     
@@ -371,63 +648,9 @@ public struct DatabaseMigrator {
         if eraseDatabaseOnSchemaChange {
             var needsErase = false
             try db.inTransaction(.deferred) {
-                let appliedIdentifiers = try self.appliedIdentifiers(db)
-                let knownIdentifiers = Set(_migrations.map { $0.identifier })
-                if !appliedIdentifiers.isSubset(of: knownIdentifiers) {
-                    // Database contains an unknown migration
-                    needsErase = true
-                    return .commit
-                }
-                
-                if let lastAppliedIdentifier = _migrations
-                    .map(\.identifier)
-                    .last(where: { appliedIdentifiers.contains($0) })
-                {
-                    // Some migrations were already applied.
-                    //
-                    // Let's migrate a temporary database up to the same
-                    // level, and compare the database schemas. If they
-                    // differ, we'll erase the database.
-                    let tmpSchema: SchemaInfo = try {
-                        // Make sure the temporary database is configured
-                        // just as the migrated database
-                        var tmpConfig = db.configuration
-                        tmpConfig.targetQueue = nil // Avoid deadlocks
-                        tmpConfig.writeTargetQueue = nil // Avoid deadlocks
-                        tmpConfig.label = "GRDB.DatabaseMigrator.temporary"
-                        
-                        // Create the temporary database on disk, just in
-                        // case migrations would involve a lot of data.
-                        //
-                        // SQLite supports temporary on-disk databases, but
-                        // those are not guaranteed to accept the
-                        // preparation functions provided by the user.
-                        //
-                        // See https://github.com/groue/GRDB.swift/issues/931
-                        // for an issue created by such databases.
-                        //
-                        // So let's create a "regular" temporary database:
-                        let tmpURL = URL(fileURLWithPath: NSTemporaryDirectory())
-                            .appendingPathComponent(ProcessInfo().globallyUniqueString)
-                        defer {
-                            try? FileManager().removeItem(at: tmpURL)
-                        }
-                        let tmpDatabase = try DatabaseQueue(path: tmpURL.path, configuration: tmpConfig)
-                        return try tmpDatabase.writeWithoutTransaction { db in
-                            try runMigrations(db, upTo: lastAppliedIdentifier)
-                            return try db.schema(.main)
-                        }
-                    }()
-                    
-                    if try db.schema(.main) != tmpSchema {
-                        needsErase = true
-                        return .commit
-                    }
-                }
-                
+                needsErase = try hasSchemaChanges(db)
                 return .commit
             }
-            
             if needsErase {
                 try db.erase()
             }
@@ -446,58 +669,35 @@ extension DatabaseMigrator {
     
     /// Returns a Publisher that asynchronously migrates a database.
     ///
-    ///     let migrator: DatabaseMigrator = ...
-    ///     let dbQueue: DatabaseQueue = ...
-    ///     let publisher = migrator.migratePublisher(dbQueue)
+    /// The database is not accessed until subscription. Value and completion
+    /// are published on `scheduler` (the main dispatch queue by default).
     ///
-    /// It completes on the main dispatch queue.
-    ///
-    /// - parameter writer: A DatabaseWriter (DatabaseQueue or DatabasePool)
-    ///   where migrations should apply.
-    @available(OSX 10.15, iOS 13, tvOS 13, watchOS 6, *)
-    public func migratePublisher(_ writer: DatabaseWriter) -> DatabasePublishers.Migrate {
-        migratePublisher(writer, receiveOn: DispatchQueue.main)
-    }
-    
-    /// Returns a Publisher that asynchronously migrates a database.
-    ///
-    ///     let migrator: DatabaseMigrator = ...
-    ///     let dbQueue: DatabaseQueue = ...
-    ///     let publisher = migrator.migratePublisher(dbQueue, receiveOn: DispatchQueue.global())
-    ///
-    /// It completes on `scheduler`.
-    ///
-    /// - parameter writer: A DatabaseWriter (DatabaseQueue or DatabasePool)
+    /// - parameter writer: A DatabaseWriter
     ///   where migrations should apply.
     /// - parameter scheduler: A Combine Scheduler.
-    @available(OSX 10.15, iOS 13, tvOS 13, watchOS 6, *)
-    public func migratePublisher<S>(_ writer: DatabaseWriter, receiveOn scheduler: S)
+    public func migratePublisher(
+        _ writer: any DatabaseWriter,
+        receiveOn scheduler: some Combine.Scheduler = DispatchQueue.main)
     -> DatabasePublishers.Migrate
-    where S: Scheduler
     {
         DatabasePublishers.Migrate(
             upstream: OnDemandFuture { promise in
-                self.asyncMigrate(writer) { _, error in
-                    if let error = error {
-                        promise(.failure(error))
-                    } else {
-                        promise(.success(()))
-                    }
+                self.asyncMigrate(writer) { dbResult in
+                    promise(dbResult.map { _ in })
                 }
             }
-            .eraseToAnyPublisher()
             .receiveValues(on: scheduler)
             .eraseToAnyPublisher()
         )
     }
 }
 
-@available(OSX 10.15, iOS 13, tvOS 13, watchOS 6, *)
 extension DatabasePublishers {
-    /// A publisher that migrates a database. It publishes exactly
-    /// one element, or an error.
+    /// A publisher that migrates a database.
     ///
-    /// See `DatabaseMigrator.migratePublisher(_:receiveOn:)`.
+    /// `Migrate` publishes exactly one element, or an error.
+    ///
+    /// You build such a publisher from ``DatabaseMigrator``.
     public struct Migrate: Publisher {
         public typealias Output = Void
         public typealias Failure = Error

@@ -1,5 +1,7 @@
-/// The type that can be embedded as a subquery.
-public struct SQLSubquery {
+/// An SQL subquery.
+///
+/// `SQLSubquery` is an opaque representation of an SQL subquery.
+public struct SQLSubquery: Sendable {
     private var impl: Impl
     
     private enum Impl {
@@ -85,7 +87,15 @@ extension SQLSubquery {
 
 // MARK: - SQLSubqueryable
 
-/// The protocol for types that can be embedded as a subquery.
+/// A type that can be used as SQL subquery.
+///
+/// Related SQLite documentation <https://www.sqlite.org/syntax/select-stmt.html>
+///
+/// ## Topics
+///
+/// ### Supporting Types
+///
+/// - ``SQLSubquery``
 public protocol SQLSubqueryable: SQLSpecificExpressible {
     var sqlSubquery: SQLSubquery { get }
 }
@@ -110,7 +120,7 @@ extension SQLSubqueryable {
     ///     // 1000 IN (SELECT score FROM player)
     ///     let request = Player.select(Column("score"), as: Int.self)
     ///     let condition = request.contains(1000)
-    public func contains(_ element: SQLExpressible) -> SQLExpression {
+    public func contains(_ element: some SQLExpressible) -> SQLExpression {
         SQLCollection.subquery(sqlSubquery).contains(element.sqlExpression)
     }
     

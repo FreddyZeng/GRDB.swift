@@ -1,121 +1,207 @@
 import Dispatch
 
-/// A DatabaseSnapshot sees an unchanging database content, as it existed at the
-/// moment it was created.
+/// A database connection that serializes accesses to unchanging
+/// database content, as it existed at the moment the snapshot was created.
 ///
-/// See DatabasePool.makeSnapshot()
+/// ## Overview
 ///
-/// For more information, read about "snapshot isolation" at <https://sqlite.org/isolation.html>
-public final class DatabaseSnapshot: DatabaseReader {
-    private let serializedDatabase: SerializedDatabase
+/// A `DatabaseSnapshot` never sees any database modification during its whole
+/// lifetime. All database accesses performed from a snapshot always see the
+/// same identical database content.
+///
+/// A snapshot creates one single SQLite connection. All database
+/// accesses are executed in a serial **reader dispatch queue**. The SQLite
+/// connection is closed when the `DatabaseSnapshot` is deallocated.
+///
+/// A snapshot created on a [WAL](https://sqlite.org/wal.html) database doesn't
+/// prevent database modifications performed by other connections (but it won't
+/// see them). Refer to [Isolation In SQLite](https://sqlite.org/isolation.html)
+/// for more information.
+///
+/// On non-WAL databases, a snapshot prevents all database modifications as long
+/// as it exists, because of the
+/// [SHARED lock](https://www.sqlite.org/lockingv3.html) it holds.
+///
+/// ## Usage
+///
+/// You create instances of `DatabaseSnapshot` from a ``DatabasePool``,
+/// with ``DatabasePool/makeSnapshot()``:
+///
+/// ```swift
+/// let dbPool = try DatabasePool(path: "/path/to/database.sqlite")
+/// let snapshot = try dbPool.makeSnapshot()
+/// let playerCount = try snapshot.read { db in
+///     try Player.fetchCount(db)
+/// }
+/// ```
+///
+/// When you want to control the database state seen by a snapshot, create the
+/// snapshot from within a write access, outside of any transaction.
+///
+/// For example, compare the two snapshots below. The first one is guaranteed to
+/// see an empty table of players, because it is created after all players have
+/// been deleted, and from the serialized writer dispatch queue which prevents
+/// any concurrent write. The second is created without this concurrency
+/// protection, which means that some other threads may already have created
+/// some players:
+///
+/// ```swift
+/// let snapshot1 = try dbPool.writeWithoutTransaction { db -> DatabaseSnapshot in
+///     try db.inTransaction {
+///         try Player.deleteAll(db)
+///         return .commit
+///     }
+///
+///     return try dbPool.makeSnapshot()
+/// }
+///
+/// // <- Other threads may have created some players here
+/// let snapshot2 = try dbPool.makeSnapshot()
+///
+/// // Guaranteed to be zero
+/// let count1 = try snapshot1.read { db in
+///     try Player.fetchCount(db)
+/// }
+///
+/// // Could be anything
+/// let count2 = try snapshot2.read { db in
+///     try Player.fetchCount(db)
+/// }
+/// ```
+///
+/// `DatabaseSnapshot` inherits its database access methods from the
+/// ``DatabaseReader`` protocol.
+///
+/// `DatabaseSnapshot` serializes database accesses and can't perform concurrent
+/// reads. For concurrent reads, see ``DatabaseSnapshotPool``.
+public final class DatabaseSnapshot {
+    private let reader: SerializedDatabase
     
-    /// The database configuration
     public var configuration: Configuration {
-        serializedDatabase.configuration
+        reader.configuration
     }
     
-#if SQLITE_ENABLE_SNAPSHOT
-    typealias Version = UnsafeMutablePointer<sqlite3_snapshot>
-    // Support for ValueObservation in DatabasePool
-    let version: Version?
-#else
-    typealias Version = Void
-#endif
+    /// The path to the database file.
+    public var path: String {
+        reader.path
+    }
     
-    init(path: String, configuration: Configuration = Configuration(), defaultLabel: String, purpose: String) throws {
-        var configuration = DatabasePool.readerConfiguration(configuration)
-        configuration.allowsUnsafeTransactions = true // Snaphost keeps a long-lived transaction
+    init(
+        path: String,
+        configuration: Configuration,
+        defaultLabel: String = "GRDB.DatabaseSnapshot",
+        purpose: String? = nil)
+    throws
+    {
+        let configuration = Self.configure(configuration)
         
-        serializedDatabase = try SerializedDatabase(
+        reader = try SerializedDatabase(
             path: path,
             configuration: configuration,
             defaultLabel: defaultLabel,
             purpose: purpose)
-
-        let version: Version? = try serializedDatabase.sync { db in
-            // Assert WAL mode
-            let journalMode = try String.fetchOne(db, sql: "PRAGMA journal_mode")
-            guard journalMode == "wal" else {
-                throw DatabaseError(message: "WAL mode is not activated at path: \(path)")
-            }
-            
+        
+        try reader.sync { db in
             // Open transaction
             try db.beginTransaction(.deferred)
             
             // Acquire snapshot isolation
-            try db.internalCachedStatement(sql: "SELECT rootpage FROM sqlite_master LIMIT 1").makeCursor().next()
-            
-            #if SQLITE_ENABLE_SNAPSHOT
-            // We must expect an error: https://www.sqlite.org/c3ref/snapshot_get.html
-            // > At least one transaction must be written to it first.
-            return try? db.takeVersionSnapshot()
-            #else
-            return nil
-            #endif
+            try db.execute(sql: "SELECT rootpage FROM sqlite_master LIMIT 1")
         }
-        
-        #if SQLITE_ENABLE_SNAPSHOT
-        self.version = version
-        #endif
     }
     
     deinit {
         // Leave snapshot isolation
-        serializedDatabase.reentrantSync { db in
-            #if SQLITE_ENABLE_SNAPSHOT
-            if let version = version {
-                sqlite3_snapshot_free(version)
+        reader.reentrantSync { db in
+            // Commit or rollback, but make sure we leave the read-only transaction
+            // (commit may fail with a CancellationError).
+            do {
+                try db.commit()
+            } catch {
+                try? db.rollback()
             }
-            #endif
-            try? db.commit()
+            assert(!db.isInsideTransaction)
         }
     }
     
-    public func close() throws {
-        try serializedDatabase.sync { try $0.close() }
+    private static func configure(_ configuration: Configuration) -> Configuration {
+        var configuration = configuration
+        
+        // DatabaseSnapshot can't perform parallel reads.
+        configuration.maximumReaderCount = 1
+
+        // DatabaseSnapshot is read-only.
+        configuration.readonly = true
+        
+        // DatabaseSnapshot keeps a long-lived transaction.
+        configuration.allowsUnsafeTransactions = true
+        
+        return configuration
     }
 }
 
-// DatabaseReader
-extension DatabaseSnapshot {
+extension DatabaseSnapshot: DatabaseSnapshotReader {
+    public func close() throws {
+        try reader.sync { try $0.close() }
+    }
     
     // MARK: - Interrupting Database Operations
     
     public func interrupt() {
-        serializedDatabase.interrupt()
+        reader.interrupt()
     }
     
     // MARK: - Reading from Database
     
+    @_disfavoredOverload // SR-15150 Async overloading in protocol implementation fails
     public func read<T>(_ block: (Database) throws -> T) rethrows -> T {
-        try serializedDatabase.sync(block)
+        try reader.sync(block)
     }
     
-    public func asyncRead(_ value: @escaping (Result<Database, Error>) -> Void) {
-        serializedDatabase.async { value(.success($0)) }
+    public func read<T: Sendable>(
+        _ value: @Sendable (Database) throws -> T
+    ) async throws -> T {
+        try await reader.execute(value)
     }
     
+    public func asyncRead(
+        _ value: @escaping @Sendable (Result<Database, Error>) -> Void
+    ) {
+        reader.async { value(.success($0)) }
+    }
+    
+    @_disfavoredOverload // SR-15150 Async overloading in protocol implementation fails
     public func unsafeRead<T>(_ value: (Database) throws -> T) rethrows -> T {
-        try serializedDatabase.sync(value)
+        try reader.sync(value)
     }
     
-    public func asyncUnsafeRead(_ value: @escaping (Result<Database, Error>) -> Void) {
-        serializedDatabase.async { value(.success($0)) }
+    // There is no such thing as an unsafe access to a snapshot.
+    // We can't provide this as a default implementation in
+    // `DatabaseSnapshotReader`,  because of
+    // <https://github.com/apple/swift/issues/74469>.
+    public func unsafeRead<T: Sendable>(
+        _ value: @Sendable (Database) throws -> T
+    ) async throws -> T {
+        try await read(value)
+    }
+    
+    public func asyncUnsafeRead(
+        _ value: @escaping @Sendable (Result<Database, Error>) -> Void
+    ) {
+        reader.async { value(.success($0)) }
     }
     
     public func unsafeReentrantRead<T>(_ value: (Database) throws -> T) throws -> T {
-        try serializedDatabase.reentrantSync(value)
+        try reader.reentrantSync(value)
     }
     
     // MARK: - Database Observation
     
-    /// :nodoc:
     public func _add<Reducer: ValueReducer>(
         observation: ValueObservation<Reducer>,
-        scheduling scheduler: ValueObservationScheduler,
-        onChange: @escaping (Reducer.Value) -> Void)
-    -> DatabaseCancellable
-    {
+        scheduling scheduler: some ValueObservationScheduler,
+        onChange: @escaping @Sendable (Reducer.Value) -> Void
+    ) -> AnyDatabaseCancellable {
         _addReadOnly(
             observation: observation,
             scheduling: scheduler,

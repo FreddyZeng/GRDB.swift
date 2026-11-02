@@ -47,7 +47,7 @@ struct SQLQueryGenerator: Refinable {
         }
         
         let filter = try relation.filterPromise?.resolve(context.db)
-        if let filter = filter {
+        if let filter {
             sql += " WHERE "
             sql += try filter.sql(context)
         }
@@ -83,7 +83,7 @@ struct SQLQueryGenerator: Refinable {
             limit = SQLLimit(limit: 1, offset: limit?.offset)
         }
         
-        if let limit = limit {
+        if let limit {
             sql += " LIMIT "
             sql += limit.sql
         }
@@ -145,23 +145,31 @@ struct SQLQueryGenerator: Refinable {
         return statement
     }
     
+    /// Returns an optimized database region, when possible.
+    ///
+    /// The optimized region allows us to track individual rowids, and also
+    /// discard some provably empty requests such as `Player.none()`.
     private func optimizedSelectedRegion(_ db: Database, _ selectedRegion: DatabaseRegion) throws -> DatabaseRegion {
-        // Can we intersect the region with rowIds?
-        //
-        // Give up unless request feeds from a single database table
+        var optimizedRegion = selectedRegion
+        
+        // Give up unless request fetches from a database table
         let tableName = relation.source.tableName
         guard try db.tableExists(tableName) else { // skip views
-            return selectedRegion
+            return optimizedRegion
         }
         
-        // The filter knows better
-        guard let filter = try relation.filterPromise?.resolve(db),
-              let rowIDs = try filter.identifyingRowIDs(db, for: relation.source.alias)
-        else {
-            return selectedRegion
+        // If the request is filtered on rowIds, we can optimize the region:
+        //
+        // - Player.filter(Column("id") == 1) // region "player(*)[1]"
+        // - Player.filter(ids: [1, 2, 3])    // region "player(*)[1, 2, 3]"
+        // - Player.none()                    // region "empty"
+        if let filter = try relation.filterPromise?.resolve(db),
+           let rowIDs = try filter.identifyingRowIDs(db, for: relation.source.alias)
+        {
+            optimizedRegion = optimizedRegion.tableIntersection(tableName, rowIds: rowIDs)
         }
         
-        return selectedRegion.tableIntersection(tableName, rowIds: rowIDs)
+        return optimizedRegion
     }
     
     /// If true, executing this query yields at most one row.
@@ -181,8 +189,8 @@ struct SQLQueryGenerator: Refinable {
         // Do we filter on a unique key?
         let tableName = relation.source.tableName
         if try db.tableExists(tableName), // skip views
-           let identifyingColums = try filter?.identifyingColums(db, for: relation.source.alias),
-           try db.table(tableName, hasUniqueKey: identifyingColums)
+           let identifyingColumns = try filter?.identifyingColumns(db, for: relation.source.alias),
+           try db.table(tableName, hasUniqueKey: identifyingColumns)
         {
             // Filter by unique key: guaranteed single row!
             return true
@@ -197,11 +205,13 @@ struct SQLQueryGenerator: Refinable {
         return false
     }
     
-    func makeDeleteStatement(_ db: Database) throws -> Statement {
+    /// Returns a `DELETE` statement, with `RETURNING` clause if `selection`
+    /// is not empty.
+    func makeDeleteStatement(_ db: Database, selection: [any SQLSelectable] = []) throws -> Statement {
         switch try grouping(db) {
         case .none:
             guard relation.joins.isEmpty else {
-                return try makeTrivialDeleteStatement(db)
+                return try makeTrivialDeleteStatement(db, selection: selection)
             }
             
             let context = SQLGenerationContext(db, aliases: relation.allAliases, ctes: relation.ctes)
@@ -225,12 +235,14 @@ struct SQLQueryGenerator: Refinable {
                 sql += " LIMIT " + limit.sql
             }
             
-            let statement = try db.makeStatement(sql: sql)
-            statement.arguments = context.arguments
-            return statement
+            return try makeStatement(
+                db, sql: sql,
+                arguments: context.arguments,
+                returning: selection,
+                from: relation.source.tableName)
             
         case .unique:
-            return try makeTrivialDeleteStatement(db)
+            return try makeTrivialDeleteStatement(db, selection: selection)
             
         case .nonUnique:
             // Programmer error
@@ -239,7 +251,8 @@ struct SQLQueryGenerator: Refinable {
     }
     
     /// DELETE FROM table WHERE id IN (SELECT id FROM table ...)
-    private func makeTrivialDeleteStatement(_ db: Database) throws -> Statement {
+    /// DELETE FROM table WHERE id IN (SELECT id FROM table ...) RETURNING ...
+    private func makeTrivialDeleteStatement(_ db: Database, selection: [any SQLSelectable]) throws -> Statement {
         let tableName = relation.source.tableName
         let alias = TableAlias(tableName: tableName)
         let context = SQLGenerationContext(db, aliases: [alias])
@@ -255,16 +268,22 @@ struct SQLQueryGenerator: Refinable {
         sql += try selectPrimaryKey.requestSQL(subqueryContext)
         sql += ")"
         
-        let statement = try db.makeStatement(sql: sql)
-        statement.arguments = context.arguments
-        return statement
+        return try makeStatement(
+            db, sql: sql,
+            arguments: context.arguments,
+            returning: selection,
+            from: tableName)
     }
     
-    /// Returns nil if assignments is empty
+    /// Returns an `UPDATE` statement, with `RETURNING` clause if `selection`
+    /// is not empty.
+    ///
+    /// Returns nil if assignments is empty.
     func makeUpdateStatement(
         _ db: Database,
         conflictResolution: Database.ConflictResolution,
-        assignments: [ColumnAssignment])
+        assignments: [ColumnAssignment],
+        selection: [any SQLSelectable] = [])
     throws -> Statement?
     {
         switch try grouping(db) {
@@ -273,13 +292,8 @@ struct SQLQueryGenerator: Refinable {
                 return try makeTrivialUpdateStatement(
                     db,
                     conflictResolution: conflictResolution,
-                    assignments: assignments)
-            }
-            
-            // Check for empty assignments after all programmer errors have
-            // been checked.
-            if assignments.isEmpty {
-                return nil
+                    assignments: assignments,
+                    selection: selection)
             }
             
             let context = SQLGenerationContext(db, aliases: relation.allAliases, ctes: relation.ctes)
@@ -293,10 +307,13 @@ struct SQLQueryGenerator: Refinable {
             
             sql += try relation.source.sql(context)
             
-            sql += " SET "
-            sql += try assignments
-                .map { try $0.sql(context) }
+            let updateSQL = try assignments
+                .compactMap { try $0.sql(context) }
                 .joined(separator: ", ")
+            if updateSQL.isEmpty {
+                return nil
+            }
+            sql += " SET \(updateSQL)"
             
             if let filter = try relation.filterPromise?.resolve(db) {
                 sql += " WHERE "
@@ -314,12 +331,18 @@ struct SQLQueryGenerator: Refinable {
                 sql += " LIMIT " + limit.sql
             }
             
-            let statement = try db.makeStatement(sql: sql)
-            statement.arguments = context.arguments
-            return statement
+            return try makeStatement(
+                db, sql: sql,
+                arguments: context.arguments,
+                returning: selection,
+                from: relation.source.tableName)
             
         case .unique:
-            return try makeTrivialUpdateStatement(db, conflictResolution: conflictResolution, assignments: assignments)
+            return try makeTrivialUpdateStatement(
+                db,
+                conflictResolution: conflictResolution,
+                assignments: assignments,
+                selection: selection)
             
         case .nonUnique:
             // Programmer error
@@ -328,19 +351,15 @@ struct SQLQueryGenerator: Refinable {
     }
     
     /// UPDATE table SET ... WHERE id IN (SELECT id FROM table ...)
+    /// UPDATE table SET ... WHERE id IN (SELECT id FROM table ...) RETURNING ...
     /// Returns nil if assignments is empty
     private func makeTrivialUpdateStatement(
         _ db: Database,
         conflictResolution: Database.ConflictResolution,
-        assignments: [ColumnAssignment])
+        assignments: [ColumnAssignment],
+        selection: [any SQLSelectable])
     throws -> Statement?
     {
-        // Check for empty assignments after all programmer errors have
-        // been checked.
-        if assignments.isEmpty {
-            return nil
-        }
-        
         let tableName = relation.source.tableName
         let alias = TableAlias(tableName: tableName)
         let context = SQLGenerationContext(db, aliases: [alias])
@@ -358,10 +377,13 @@ struct SQLQueryGenerator: Refinable {
         sql += tableName.quotedDatabaseIdentifier
         
         // SET column = value...
-        sql += " SET "
-        sql += try assignments
-            .map { try $0.sql(context) }
+        let updateSQL = try assignments
+            .compactMap { try $0.sql(context) }
             .joined(separator: ", ")
+        if updateSQL.isEmpty {
+            return nil
+        }
+        sql += " SET \(updateSQL)"
         
         // WHERE id IN (SELECT id FROM ...)
         sql += " WHERE "
@@ -370,9 +392,44 @@ struct SQLQueryGenerator: Refinable {
         sql += try selectPrimaryKey.requestSQL(subqueryContext)
         sql += ")"
         
-        let statement = try db.makeStatement(sql: sql)
-        statement.arguments = context.arguments
-        return statement
+        return try makeStatement(
+            db, sql: sql,
+            arguments: context.arguments,
+            returning: selection,
+            from: tableName)
+    }
+    
+    // Support for the RETURNING clause
+    private func makeStatement(
+        _ db: Database,
+        sql: String,
+        arguments: StatementArguments,
+        returning selection: [any SQLSelectable],
+        from tableName: String)
+    throws -> Statement
+    {
+        if selection.isEmpty {
+            let statement = try db.makeStatement(sql: sql)
+            statement.arguments = arguments
+            return statement
+        } else {
+            // Generate the RETURNING clause by turning selection into SQL.
+            // Make sure the selection is qualified with a table alias, so
+            // that selectables such as `.allColumns(excluding:)` can query
+            // the database about the database table.
+            let alias = TableAlias(tableName: tableName)
+            let context = SQLGenerationContext(db, aliases: [alias])
+            var sql = sql
+            var arguments = arguments
+            sql += " RETURNING "
+            sql += try selection
+                .map { try $0.sqlSelection.qualified(with: alias).sql(context) }
+                .joined(separator: ", ")
+            arguments += context.arguments
+            let statement = try db.makeStatement(sql: sql)
+            statement.arguments = arguments
+            return statement
+        }
     }
     
     private func commonTableExpressionsPrefix(_ context: SQLGenerationContext) throws -> String {
@@ -409,7 +466,7 @@ struct SQLQueryGenerator: Refinable {
         case none
         /// Grouped by unique key: SELECT ... FROM player GROUP BY id
         case unique
-        /// Grouped by some non-unique columnns: SELECT ... FROM player GROUP BY teamId
+        /// Grouped by some non-unique columns: SELECT ... FROM player GROUP BY teamId
         case nonUnique
     }
     
@@ -458,31 +515,34 @@ struct SQLQueryGenerator: Refinable {
     ///     let request = Book.all()
     ///     for row in try Row.fetchAll(db, request) {
     ///         row // [id:1, title:"Moby-Dick"]
-    ///         let book = Book(row: row)
+    ///         let book = try Book(row: row)
     ///     }
     ///
-    /// But as soon as the selection includes columns of a included relation,
+    /// But as soon as the selection includes columns of an included relation,
     /// we need an adapter:
     ///
     ///     // SELECT book.*, author.* FROM book JOIN author ON author.id = book.authorId
     ///     let request = Book.including(required: Book.author)
     ///     for row in try Row.fetchAll(db, request) {
     ///         row // [id:1, title:"Moby-Dick"]
-    ///         let book = Book(row: row)
+    ///         let book = try Book(row: row)
     ///
     ///         row.scopes["author"] // [id:12, name:"Herman Melville"]
     ///         let author: Author = row["author"]
     ///     }
-    private func rowAdapter(_ context: SQLGenerationContext) throws -> RowAdapter? {
+    private func rowAdapter(_ context: SQLGenerationContext) throws -> (any RowAdapter)? {
         try relation.rowAdapter(context, fromIndex: 0, rootRelation: true)?.adapter
     }
 }
 
+// This type is marked as `Sendable` in order to avoid compiler warnings,
+// but it should not need to be: instances are synchronously created, used,
+// and discarded.
 /// To generate SQL, we need a "qualified" relation, where all tables,
 /// expressions, etc, are qualified with table aliases.
 ///
 /// All those aliases let us disambiguate tables at the SQL level, and
-/// prefix columns names. For example, the following request...
+/// prefix column names. For example, the following request...
 ///
 ///      Book.filter(Column("kind") == Book.Kind.novel)
 ///          .including(optional: Book.author)
@@ -497,8 +557,8 @@ struct SQLQueryGenerator: Refinable {
 ///      LEFT JOIN person person1 ON person1.id = book.authorId
 ///      LEFT JOIN person person2 ON person2.id = book.translatorId
 ///      LEFT JOIN award ON award.bookId = book.id
-///      GROUP BY book.id
 ///      WHERE book.kind = 'novel'
+///      GROUP BY book.id
 ///
 /// `SQLQualifiedRelation` contains the following information:
 ///
@@ -511,10 +571,9 @@ struct SQLQueryGenerator: Refinable {
 ///     HAVING ...   -- havingExpressionPromise
 ///     ORDER BY ... -- ordering
 ///     LIMIT ...    -- limit
-
-private struct SQLQualifiedRelation {
+private struct SQLQualifiedRelation: Sendable {
     /// All aliases, including aliases of joined relations
-    var allAliases: [TableAlias] {
+    var allAliases: [TableAliasBase] {
         joins.reduce(into: [source.alias].compactMap { $0 }) {
             $0.append(contentsOf: $1.value.relation.allAliases)
         }
@@ -531,8 +590,8 @@ private struct SQLQualifiedRelation {
     /// The full selection, including selection of joined relations
     var selectionPromise: DatabasePromise<[SQLSelection]> {
         DatabasePromise { db in
-            let selection = try self.sourceSelectionPromise.resolve(db)
-            return try self.joins.values.reduce(into: selection) { selection, join in
+            let selection = try sourceSelectionPromise.resolve(db)
+            return try joins.values.reduce(into: selection) { selection, join in
                 let joinedSelection = try join.relation.selectionPromise.resolve(db)
                 selection.append(contentsOf: joinedSelection)
             }
@@ -600,12 +659,12 @@ private struct SQLQualifiedRelation {
     ///   SQLQueryGenerator (as opposed to the joined relations).
     /// - returns: An optional tuple made of a RowAdapter and the index past the
     ///   rightmost selected column of this relation. Nil is returned if this
-    ///   relations does not need any row adapter.
+    ///   relation does not need any row adapter.
     func rowAdapter(
         _ context: SQLGenerationContext,
         fromIndex startIndex: Int,
         rootRelation: Bool) throws
-    -> (adapter: RowAdapter, endIndex: Int)?
+    -> (adapter: any RowAdapter, endIndex: Int)?
     {
         // Root relation && no join => no need for any adapter
         if rootRelation && joins.isEmpty {
@@ -619,7 +678,7 @@ private struct SQLQualifiedRelation {
         // Recursively build adapters for each joined relation with a selection.
         // Name them according to the join keys.
         var endIndex = startIndex + sourceSelectionWidth
-        var scopes: [String: RowAdapter] = [:]
+        var scopes: [String: any RowAdapter] = [:]
         for (key, join) in joins {
             if let (joinAdapter, joinEndIndex) = try join
                 .relation
@@ -644,7 +703,7 @@ private struct SQLQualifiedRelation {
         // The RangeRowAdapter hides the columns appended by joined relations:
         //
         //          row // [id:1, title:"Moby-Dick"]
-        //          let book = Book(row: row)
+        //          let book = try Book(row: row)
         //
         // Scopes give access to those joined relations:
         //
@@ -680,7 +739,7 @@ extension SQLQualifiedRelation: Refinable { }
 /// A "qualified" source, where all tables are identified with a table alias.
 private struct SQLQualifiedSource {
     var tableName: String
-    var alias: TableAlias
+    var alias: TableAliasBase
     
     init(_ source: SQLSource) {
         self.tableName = source.tableName
@@ -729,13 +788,13 @@ private struct SQLQualifiedJoin: Refinable {
         self.relation = SQLQualifiedRelation(child.relation)
     }
     
-    func sql(_ context: SQLGenerationContext, leftAlias: TableAlias) throws -> String {
+    func sql(_ context: SQLGenerationContext, leftAlias: TableAliasBase) throws -> String {
         try sql(context, leftAlias: leftAlias, allowingInnerJoin: true)
     }
     
     private func sql(
         _ context: SQLGenerationContext,
-        leftAlias: TableAlias,
+        leftAlias: TableAliasBase,
         allowingInnerJoin allowsInnerJoin: Bool)
     throws -> String
     {

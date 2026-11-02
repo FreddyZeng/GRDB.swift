@@ -3,7 +3,7 @@ import Foundation
 extension String {
     /// "player" -> "Player"
     var uppercasingFirstCharacter: String {
-        guard let first = first else {
+        guard let first else {
             return self
         }
         return String(first).uppercased() + dropFirst()
@@ -28,10 +28,10 @@ extension String {
     }
 }
 
-/// [**Experimental**](http://github.com/groue/GRDB.swift#what-are-experimental-features)
-///
 /// A type that controls GRDB string inflections.
-public struct Inflections {
+///
+/// - note: [**🔥 EXPERIMENTAL**](https://github.com/groue/GRDB.swift/blob/master/README.md#what-are-experimental-features)
+public struct Inflections: Sendable {
     private var pluralizeRules: [(NSRegularExpression, String)] = []
     private var singularizeRules: [(NSRegularExpression, String)] = []
     private var uncountablesRegularExpressions: [String: NSRegularExpression] = [:]
@@ -107,7 +107,7 @@ public struct Inflections {
     ///     inflections.plural("$", "s")
     ///     inflections.irregularSuffix("man", "men")
     ///     inflections.pluralize("man")      // "men"
-    ///     inflections.singularizes("women") // "woman"
+    ///     inflections.singularize("women") // "woman"
     ///
     /// - parameters:
     ///     - singular: The singular form.

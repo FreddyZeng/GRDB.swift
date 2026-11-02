@@ -3,7 +3,7 @@ Query Interface Organization
 
 **The [query interface] is a Swift API that approximates the [SQLite SELECT query grammar](https://sqlite.org/lang_select.html) through a hierarchy of values and protocols.**
 
-This document exposes its inner organization, so that you can leverage the most of those types and protocols when you want it.
+This document describes its inner organization, so that you can make the most of those types and protocols when you want it.
 
 In the diagram below, protocols are pale blue and have rounded corners, and standard types are grey rectangles. Solid arrows read "inherits from", and dashed arrows read "produces". Generic types are marked as such, as well as "PATs" (protocols with associated types).
 
@@ -93,7 +93,7 @@ Columns are special expressions that allow some optimizations and niceties:
     ValueObservation.tracking { db in
         try Player.fetchOne(db, id: 1)
         // or
-        try Player.filter(Column("id") == 1).fetchOne(db)
+        try Player.filter { $0.id == 1 }.fetchOne(db)
     }
     
     // Non-optimized observations
@@ -110,7 +110,7 @@ Columns are special expressions that allow some optimizations and niceties:
     // Nicer SQL
     // SELECT * FROM player WHERE id = 1
     try Player.fetchOne(db, id: 1)
-    try Player.filter(Column("id") == 1).fetchOne(db)
+    try Player.filter { $0.id == 1 }.fetchOne(db)
     
     // Less nice SQL
     // SELECT * FROM player WHERE id = 1 LIMIT 1
@@ -132,7 +132,9 @@ DatabaseRegionConvertible feeds [DatabaseRegionObservation], which tracks databa
 ```swift
 let request = Player.all()
 let observation = DatabaseRegionObservation(tracking: request)
-let observer = try observation.start(in: dbQueue) { (db: Database) in
+let cancellable = observation.start(in: dbQueue) { error in
+    // Handle error
+} onChange: { (db: Database) in
     print("Players were changed")
 }
 ```
@@ -179,9 +181,9 @@ protocol DatabaseValueConvertible: SQLExpressible {
 `DerivableRequest` is the protocol for query interface requests and associations that can be refined. It is adopted by [QueryInterfaceRequest] and [Association].
 
 ```swift
-protocol DerivableRequest: AggregatingRequest, FilteredRequest,
-                           JoinableRequest, OrderedRequest,
-                           SelectionRequest, TableRequest
+protocol DerivableRequest<RowDecoder>: AggregatingRequest, FilteredRequest,
+                                       JoinableRequest, OrderedRequest,
+                                       SelectionRequest, TableRequest
 {
     func distinct() -> Self
     func with<RowDecoder>(_ cte: CommonTableExpression<RowDecoder>) -> Self
@@ -195,14 +197,14 @@ protocol DerivableRequest: AggregatingRequest, FilteredRequest,
 - `SelectionRequest` provides selection methods such as `select(selection)` or `annotated(with: selection)`
 - `TableRequest` provides table targeting methods such as `aliased(tableAlias)`
 
-DerivableRequest makes it possible to build reusable code snippets that apply to both requests and associations. You'll read more about it in the [Good Practices for Designing Record Types](GoodPracticesForDesigningRecordTypes.md) and [Associations](AssociationsBasics.md).
+DerivableRequest makes it possible to build reusable code snippets that apply to both requests and associations. You'll read more about it in the [Recommended Practices for Designing Record Types](https://swiftpackageindex.com/groue/GRDB.swift/documentation/grdb/recordrecommendedpractices) and [Associations](AssociationsBasics.md).
 
 ### FetchRequest
 
 `FetchRequest` is the protocol for requests that can fetch. It is adopted by [QueryInterfaceRequest] and [SQLRequest]. It conforms to [SQLSubqueryable] and [DatabaseRegionConvertible].
 
 ```swift
-protocol FetchRequest: SQLSubqueryable, DatabaseRegionConvertible {
+protocol FetchRequest<RowDecoder>: SQLSubqueryable, DatabaseRegionConvertible {
     /// The type that tells how fetched database rows should be interpreted.
     associatedtype RowDecoder
     
@@ -261,7 +263,7 @@ The basic value types conform to [DatabaseValueConvertible] so that they can fee
 ```swift
 // SELECT * FROM player WHERE name = 'O''Brien'
 //                                   ~~~~~~~~~~
-Player.filter(Column("name") == "O'Brien")
+Player.filter { $0.name == "O'Brien" }
 ```
 
 ### QueryInterfaceRequest
@@ -319,10 +321,10 @@ let players: [Player] = try request.fetchAll(db)
 SQL("name = \("O'Brien")").sqlExpression
 
 // SQLOrdering
-SQL("name DESC)").sqlOrdering
+SQL("name DESC").sqlOrdering
 
 // SQLSelection
-SQL("score + bonus AS total)").sqlSelection
+SQL("score + bonus AS total").sqlSelection
 SQL("*").sqlSelection
 
 // SQLRequest
@@ -346,8 +348,9 @@ Functions and methods that build an SQL expression should return an SQLExpressio
 
 ```swift
 // SELECT * FROM player WHERE LENGTH(name) > 0
-let expression = length(Column("name")) > 0 // SQLExpression
-Player.filter(expression)
+Player.filter {
+    length($0.name) > 0 // SQLExpression
+}
 ```
 
 When it looks like GRDB APIs are unable to build a particular expression, use [SQL]:
@@ -358,7 +361,7 @@ func date(_ value: SQLSpecificExpressible) -> SQLExpression {
 }
 
 // SELECT * FROM player WHERE DATE(createdAt) = '2020-01-23'
-let request = Player.filter(date(Column("createdAt")) == "2020-01-23")
+let request = Player.filter { date($0.createdAt) == "2020-01-23" }
 ```
 
 This technique, based on [SQL Interpolation], is composable and works well even when several tables are involved. See how the `createdAt` column below is correctly attributed to the `player` table:
@@ -368,7 +371,7 @@ This technique, based on [SQL Interpolation], is composable and works well even 
 // JOIN team ON team.id = player.teamId
 // WHERE DATE(player.createdAt) = '2020-01-23'
 let request = Player
-    .filter(date(Column("createdAt")) == "2020-01-23")
+    .filter { date($0.createdAt) == "2020-01-23" }
     .including(required: Player.team)
 ```
 
@@ -497,7 +500,7 @@ protocol SQLSelectable {
 SQLSelectable feeds the `select()` method of the query interface:
 
 ```swift
-Player.select(AllColumns())
+Player.select(.allColumns)
 Player.select(Column("name"), Column("score"))
 ```
 
@@ -505,7 +508,7 @@ All [SQLSpecificExpressible] values are selectable. Other selectable values are:
 
 ```swift
 // SELECT * FROM player
-Player.select(AllColumns())
+Player.select(.allColumns)
 
 // SELECT MAX(score) AS maxScore FROM player
 Player.select(max(Column("score")).forKey("maxScore"))
@@ -583,7 +586,7 @@ SQLSubqueryable provides the GRDB support for subqueries. Its [SQLSpecificExpres
 // SELECT * FROM player
 // WHERE score >= (SELECT AVG(score) FROM player)
 let averageScore = Player.select(average(Column("score")))
-Player.filter(Column("score") >= averageScore)
+Player.filter { $0.score >= averageScore }
 ```
 
 SQLSubqueryable has the `contains(_:)` and `exists()` methods that support the `value IN (subquery)` and `EXISTS (subquery)` expressions.
@@ -607,8 +610,8 @@ myRequest(Player.select(...).filter(...))
 [association aggregates]: AssociationsBasics.md#association-aggregates
 [Column]: #column
 [ColumnExpression]: #columnexpression
-[DatabaseRegionConvertible]: #databaseregionconvertible
-[DatabaseRegionObservation]: ../README.md#databaseregionobservation
+[DatabaseRegionConvertible]: https://swiftpackageindex.com/groue/GRDB.swift/documentation/grdb/databaseregionconvertible
+[DatabaseRegionObservation]: https://swiftpackageindex.com/groue/GRDB.swift/documentation/grdb/databaseregionobservation
 [DatabaseValue]: #databasevalue
 [DatabaseValueConvertible]: #databasevalueconvertible
 [DerivableRequest]: #derivablerequest

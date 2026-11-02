@@ -1,3 +1,17 @@
+// Import C SQLite functions
+#if GRDBCIPHER // CocoaPods (SQLCipher subspec)
+import SQLCipher
+#elseif GRDBFRAMEWORK // GRDB.xcodeproj or CocoaPods (standard subspec)
+import SQLite3
+#elseif GRDBCUSTOMSQLITE // GRDBCustom Framework
+#elseif SQLCipher
+import SQLCipher
+#else // Default SPM trait must be the default. It impossible to detect from Xcode.
+import GRDBSQLite
+#endif
+
+import Foundation
+
 // MARK: - Value Types
 
 /// Bool adopts DatabaseValueConvertible and StatementColumnConvertible.
@@ -8,16 +22,21 @@ extension Bool: DatabaseValueConvertible, StatementColumnConvertible {
     /// - parameters:
     ///     - sqliteStatement: A pointer to an SQLite statement.
     ///     - index: The column index.
-    public init(sqliteStatement: SQLiteStatement, index: Int32) {
+    public init(sqliteStatement: SQLiteStatement, index: CInt) {
         self = sqlite3_column_int64(sqliteStatement, index) != 0
     }
     
-    /// Returns a value that can be stored in the database.
+    /// Returns an INTEGER database value.
     public var databaseValue: DatabaseValue {
         (self ? 1 : 0).databaseValue
     }
     
-    /// Returns a Bool initialized from *dbValue*, if possible.
+    /// Returns a `Bool` from the specified database value.
+    ///
+    /// If the database value contains an integer or a double, returns whether
+    /// this number is zero.
+    ///
+    /// Otherwise, returns nil.
     public static func fromDatabaseValue(_ dbValue: DatabaseValue) -> Bool? {
         // IMPLEMENTATION NOTE
         //
@@ -100,18 +119,26 @@ extension Int: DatabaseValueConvertible, StatementColumnConvertible {
     ///     - index: The column index.
     @inline(__always)
     @inlinable
-    public init?(sqliteStatement: SQLiteStatement, index: Int32) {
+    public init?(sqliteStatement: SQLiteStatement, index: CInt) {
         let int64 = sqlite3_column_int64(sqliteStatement, index)
         guard let v = Int(exactly: int64) else { return nil }
         self = v
     }
     
-    /// Returns a value that can be stored in the database.
+    /// Returns an INTEGER database value.
     public var databaseValue: DatabaseValue {
         Int64(self).databaseValue
     }
     
-    /// Returns an Int initialized from *dbValue*, if possible.
+    /// Returns an `Int` from the specified database value.
+    ///
+    /// If the database value contains an integer representable in this type,
+    /// returns this integer.
+    ///
+    /// If the database value contains a double representable in this type after
+    /// rounding toward zero, returns the conversion.
+    ///
+    /// Otherwise, returns nil.
     public static func fromDatabaseValue(_ dbValue: DatabaseValue) -> Int? {
         Int64.fromDatabaseValue(dbValue).flatMap { Int(exactly: $0) }
     }
@@ -131,18 +158,26 @@ extension Int8: DatabaseValueConvertible, StatementColumnConvertible {
     ///     - index: The column index.
     @inline(__always)
     @inlinable
-    public init?(sqliteStatement: SQLiteStatement, index: Int32) {
+    public init?(sqliteStatement: SQLiteStatement, index: CInt) {
         let int64 = sqlite3_column_int64(sqliteStatement, index)
         guard let v = Int8(exactly: int64) else { return nil }
         self = v
     }
     
-    /// Returns a value that can be stored in the database.
+    /// Returns an INTEGER database value.
     public var databaseValue: DatabaseValue {
         Int64(self).databaseValue
     }
     
-    /// Returns an Int8 initialized from *dbValue*, if possible.
+    /// Returns an `Int8` from the specified database value.
+    ///
+    /// If the database value contains an integer representable in this type,
+    /// returns this integer.
+    ///
+    /// If the database value contains a double representable in this type after
+    /// rounding toward zero, returns the conversion.
+    ///
+    /// Otherwise, returns nil.
     public static func fromDatabaseValue(_ dbValue: DatabaseValue) -> Int8? {
         Int64.fromDatabaseValue(dbValue).flatMap { Int8(exactly: $0) }
     }
@@ -162,18 +197,26 @@ extension Int16: DatabaseValueConvertible, StatementColumnConvertible {
     ///     - index: The column index.
     @inline(__always)
     @inlinable
-    public init?(sqliteStatement: SQLiteStatement, index: Int32) {
+    public init?(sqliteStatement: SQLiteStatement, index: CInt) {
         let int64 = sqlite3_column_int64(sqliteStatement, index)
         guard let v = Int16(exactly: int64) else { return nil }
         self = v
     }
     
-    /// Returns a value that can be stored in the database.
+    /// Returns an INTEGER database value.
     public var databaseValue: DatabaseValue {
         Int64(self).databaseValue
     }
     
-    /// Returns an Int16 initialized from *dbValue*, if possible.
+    /// Returns an `Int16` from the specified database value.
+    ///
+    /// If the database value contains an integer representable in this type,
+    /// returns this integer.
+    ///
+    /// If the database value contains a double representable in this type after
+    /// rounding toward zero, returns the conversion.
+    ///
+    /// Otherwise, returns nil.
     public static func fromDatabaseValue(_ dbValue: DatabaseValue) -> Int16? {
         Int64.fromDatabaseValue(dbValue).flatMap { Int16(exactly: $0) }
     }
@@ -193,18 +236,26 @@ extension Int32: DatabaseValueConvertible, StatementColumnConvertible {
     ///     - index: The column index.
     @inline(__always)
     @inlinable
-    public init?(sqliteStatement: SQLiteStatement, index: Int32) {
+    public init?(sqliteStatement: SQLiteStatement, index: CInt) {
         let int64 = sqlite3_column_int64(sqliteStatement, index)
         guard let v = Int32(exactly: int64) else { return nil }
         self = v
     }
     
-    /// Returns a value that can be stored in the database.
+    /// Returns an INTEGER database value.
     public var databaseValue: DatabaseValue {
         Int64(self).databaseValue
     }
     
-    /// Returns an Int32 initialized from *dbValue*, if possible.
+    /// Returns an `Int32` from the specified database value.
+    ///
+    /// If the database value contains an integer representable in this type,
+    /// returns this integer.
+    ///
+    /// If the database value contains a double representable in this type after
+    /// rounding toward zero, returns the conversion.
+    ///
+    /// Otherwise, returns nil.
     public static func fromDatabaseValue(_ dbValue: DatabaseValue) -> Int32? {
         Int64.fromDatabaseValue(dbValue).flatMap { Int32(exactly: $0) }
     }
@@ -222,16 +273,23 @@ extension Int64: DatabaseValueConvertible, StatementColumnConvertible {
     /// - parameters:
     ///     - sqliteStatement: A pointer to an SQLite statement.
     ///     - index: The column index.
-    public init(sqliteStatement: SQLiteStatement, index: Int32) {
+    public init(sqliteStatement: SQLiteStatement, index: CInt) {
         self = sqlite3_column_int64(sqliteStatement, index)
     }
     
-    /// Returns a value that can be stored in the database.
+    /// Returns an INTEGER database value.
     public var databaseValue: DatabaseValue {
         DatabaseValue(storage: .int64(self))
     }
     
-    /// Returns an Int64 initialized from *dbValue*, if possible.
+    /// Returns an `Int64` from the specified database value.
+    ///
+    /// If the database value contains an integer, returns this integer.
+    ///
+    /// If the database value contains a double representable in this type after
+    /// rounding toward zero, returns the conversion.
+    ///
+    /// Otherwise, returns nil.
     public static func fromDatabaseValue(_ dbValue: DatabaseValue) -> Int64? {
         switch dbValue.storage {
         case .int64(let int64):
@@ -260,18 +318,26 @@ extension UInt: DatabaseValueConvertible, StatementColumnConvertible {
     ///     - index: The column index.
     @inline(__always)
     @inlinable
-    public init?(sqliteStatement: SQLiteStatement, index: Int32) {
+    public init?(sqliteStatement: SQLiteStatement, index: CInt) {
         let int64 = sqlite3_column_int64(sqliteStatement, index)
         guard let v = UInt(exactly: int64) else { return nil }
         self = v
     }
     
-    /// Returns a value that can be stored in the database.
+    /// Returns an INTEGER database value.
     public var databaseValue: DatabaseValue {
         Int64(self).databaseValue
     }
     
-    /// Returns an Int initialized from *dbValue*, if possible.
+    /// Returns a `UInt` from the specified database value.
+    ///
+    /// If the database value contains an integer representable in this type,
+    /// returns this integer.
+    ///
+    /// If the database value contains a double representable in this type after
+    /// rounding toward zero, returns the conversion.
+    ///
+    /// Otherwise, returns nil.
     public static func fromDatabaseValue(_ dbValue: DatabaseValue) -> UInt? {
         Int64.fromDatabaseValue(dbValue).flatMap { UInt(exactly: $0) }
     }
@@ -291,18 +357,26 @@ extension UInt8: DatabaseValueConvertible, StatementColumnConvertible {
     ///     - index: The column index.
     @inline(__always)
     @inlinable
-    public init?(sqliteStatement: SQLiteStatement, index: Int32) {
+    public init?(sqliteStatement: SQLiteStatement, index: CInt) {
         let int64 = sqlite3_column_int64(sqliteStatement, index)
         guard let v = UInt8(exactly: int64) else { return nil }
         self = v
     }
     
-    /// Returns a value that can be stored in the database.
+    /// Returns an INTEGER database value.
     public var databaseValue: DatabaseValue {
         Int64(self).databaseValue
     }
     
-    /// Returns an UInt8 initialized from *dbValue*, if possible.
+    /// Returns a `UInt8` from the specified database value.
+    ///
+    /// If the database value contains an integer representable in this type,
+    /// returns this integer.
+    ///
+    /// If the database value contains a double representable in this type after
+    /// rounding toward zero, returns the conversion.
+    ///
+    /// Otherwise, returns nil.
     public static func fromDatabaseValue(_ dbValue: DatabaseValue) -> UInt8? {
         Int64.fromDatabaseValue(dbValue).flatMap { UInt8(exactly: $0) }
     }
@@ -322,18 +396,26 @@ extension UInt16: DatabaseValueConvertible, StatementColumnConvertible {
     ///     - index: The column index.
     @inline(__always)
     @inlinable
-    public init?(sqliteStatement: SQLiteStatement, index: Int32) {
+    public init?(sqliteStatement: SQLiteStatement, index: CInt) {
         let int64 = sqlite3_column_int64(sqliteStatement, index)
         guard let v = UInt16(exactly: int64) else { return nil }
         self = v
     }
     
-    /// Returns a value that can be stored in the database.
+    /// Returns an INTEGER database value.
     public var databaseValue: DatabaseValue {
         Int64(self).databaseValue
     }
     
-    /// Returns an UInt16 initialized from *dbValue*, if possible.
+    /// Returns a `UInt16` from the specified database value.
+    ///
+    /// If the database value contains an integer representable in this type,
+    /// returns this integer.
+    ///
+    /// If the database value contains a double representable in this type after
+    /// rounding toward zero, returns the conversion.
+    ///
+    /// Otherwise, returns nil.
     public static func fromDatabaseValue(_ dbValue: DatabaseValue) -> UInt16? {
         Int64.fromDatabaseValue(dbValue).flatMap { UInt16(exactly: $0) }
     }
@@ -353,18 +435,26 @@ extension UInt32: DatabaseValueConvertible, StatementColumnConvertible {
     ///     - index: The column index.
     @inline(__always)
     @inlinable
-    public init?(sqliteStatement: SQLiteStatement, index: Int32) {
+    public init?(sqliteStatement: SQLiteStatement, index: CInt) {
         let int64 = sqlite3_column_int64(sqliteStatement, index)
         guard let v = UInt32(exactly: int64) else { return nil }
         self = v
     }
     
-    /// Returns a value that can be stored in the database.
+    /// Returns an INTEGER database value.
     public var databaseValue: DatabaseValue {
         Int64(self).databaseValue
     }
     
-    /// Returns an UInt32 initialized from *dbValue*, if possible.
+    /// Returns a `UInt32` from the specified database value.
+    ///
+    /// If the database value contains an integer representable in this type,
+    /// returns this integer.
+    ///
+    /// If the database value contains a double representable in this type after
+    /// rounding toward zero, returns the conversion.
+    ///
+    /// Otherwise, returns nil.
     public static func fromDatabaseValue(_ dbValue: DatabaseValue) -> UInt32? {
         Int64.fromDatabaseValue(dbValue).flatMap { UInt32(exactly: $0) }
     }
@@ -384,18 +474,26 @@ extension UInt64: DatabaseValueConvertible, StatementColumnConvertible {
     ///     - index: The column index.
     @inline(__always)
     @inlinable
-    public init?(sqliteStatement: SQLiteStatement, index: Int32) {
+    public init?(sqliteStatement: SQLiteStatement, index: CInt) {
         let int64 = sqlite3_column_int64(sqliteStatement, index)
         guard let v = UInt64(exactly: int64) else { return nil }
         self = v
     }
     
-    /// Returns a value that can be stored in the database.
+    /// Returns an INTEGER database value.
     public var databaseValue: DatabaseValue {
         Int64(self).databaseValue
     }
     
-    /// Returns an UInt64 initialized from *dbValue*, if possible.
+    /// Returns a `UInt64` from the specified database value.
+    ///
+    /// If the database value contains an integer representable in this type,
+    /// returns this integer.
+    ///
+    /// If the database value contains a double representable in this type after
+    /// rounding toward zero, returns the conversion.
+    ///
+    /// Otherwise, returns nil.
     public static func fromDatabaseValue(_ dbValue: DatabaseValue) -> UInt64? {
         Int64.fromDatabaseValue(dbValue).flatMap { UInt64(exactly: $0) }
     }
@@ -413,16 +511,22 @@ extension Double: DatabaseValueConvertible, StatementColumnConvertible {
     /// - parameters:
     ///     - sqliteStatement: A pointer to an SQLite statement.
     ///     - index: The column index.
-    public init(sqliteStatement: SQLiteStatement, index: Int32) {
+    public init(sqliteStatement: SQLiteStatement, index: CInt) {
         self = sqlite3_column_double(sqliteStatement, index)
     }
     
-    /// Returns a value that can be stored in the database.
+    /// Returns a REAL database value.
     public var databaseValue: DatabaseValue {
         DatabaseValue(storage: .double(self))
     }
     
-    /// Returns a Double initialized from *dbValue*, if possible.
+    /// Returns a `Double` from the specified database value.
+    ///
+    /// If the database value contains an integer, returns the conversion.
+    ///
+    /// If the database value contains a double, returns this double.
+    ///
+    /// Otherwise, returns nil.
     public static func fromDatabaseValue(_ dbValue: DatabaseValue) -> Double? {
         switch dbValue.storage {
         case .int64(let int64):
@@ -447,16 +551,22 @@ extension Float: DatabaseValueConvertible, StatementColumnConvertible {
     /// - parameters:
     ///     - sqliteStatement: A pointer to an SQLite statement.
     ///     - index: The column index.
-    public init(sqliteStatement: SQLiteStatement, index: Int32) {
+    public init(sqliteStatement: SQLiteStatement, index: CInt) {
         self = Float(sqlite3_column_double(sqliteStatement, index))
     }
     
-    /// Returns a value that can be stored in the database.
+    /// Returns a REAL database value.
     public var databaseValue: DatabaseValue {
         Double(self).databaseValue
     }
     
-    /// Returns a Float initialized from *dbValue*, if possible.
+    /// Returns a `Float` from the specified database value.
+    ///
+    /// If the database value contains an integer, returns the conversion.
+    ///
+    /// If the database value contains a double, returns the conversion.
+    ///
+    /// Otherwise, returns nil.
     public static func fromDatabaseValue(_ dbValue: DatabaseValue) -> Float? {
         switch dbValue.storage {
         case .int64(let int64):
@@ -481,16 +591,25 @@ extension String: DatabaseValueConvertible, StatementColumnConvertible {
     /// - parameters:
     ///     - sqliteStatement: A pointer to an SQLite statement.
     ///     - index: The column index.
-    public init(sqliteStatement: SQLiteStatement, index: Int32) {
-        self = String(cString: sqlite3_column_text(sqliteStatement, index)!)
+    public init(sqliteStatement: SQLiteStatement, index: CInt) {
+        let text = sqlite3_column_text(sqliteStatement, index)
+        let byteCount = Int(sqlite3_column_bytes(sqliteStatement, index))
+        self = String(decoding: UnsafeBufferPointer(start: text, count: byteCount), as: UTF8.self)
     }
     
-    /// Returns a value that can be stored in the database.
+    /// Returns a TEXT database value.
     public var databaseValue: DatabaseValue {
         DatabaseValue(storage: .string(self))
     }
     
-    /// Returns a String initialized from *dbValue*, if possible.
+    /// Returns a `String` from the specified database value.
+    ///
+    /// If the database value contains a string, returns it.
+    ///
+    /// If the database value contains a data blob, parses this data as a
+    /// UTF8 string.
+    ///
+    /// Otherwise, returns nil.
     public static func fromDatabaseValue(_ dbValue: DatabaseValue) -> String? {
         switch dbValue.storage {
         case .blob(let data):
@@ -505,7 +624,56 @@ extension String: DatabaseValueConvertible, StatementColumnConvertible {
     }
     
     public func bind(to sqliteStatement: SQLiteStatement, at index: CInt) -> CInt {
-        sqlite3_bind_text(sqliteStatement, index, self, -1, SQLITE_TRANSIENT)
+        var string = self
+        return string.withSQLiteText {
+            sqlite3_bind_text(sqliteStatement, index, $0, $1, SQLITE_TRANSIENT)
+        }
+    }
+    
+    /// Calls the given closure after binding a statement argument.
+    ///
+    /// The binding is valid only during the execution of this method.
+    ///
+    /// This method is mutating because the string is made contiguous
+    /// if necessary.
+    ///
+    /// - parameter sqliteStatement: An SQLite statement.
+    /// - parameter index: 1-based index to statement arguments.
+    /// - parameter body: The closure to execute when argument is bound.
+    mutating func withBinding<T>(
+        to sqliteStatement: SQLiteStatement,
+        at index: CInt,
+        do body: () throws -> T
+    ) throws -> T {
+        try withSQLiteText {
+            let code = sqlite3_bind_text(sqliteStatement, index, $0, $1, nil /* SQLITE_STATIC */)
+            try checkBindingSuccess(code: code, sqliteStatement: sqliteStatement)
+            return try body()
+        }
+    }
+    
+    /// Runs body over the content of this string as a UTF8 string. This
+    /// method exists because it deals with the ASCII NUL (\0) characters,
+    /// unlike C strings.
+    ///
+    /// This method is mutating because the string is made contiguous
+    /// if necessary.
+    mutating func withSQLiteText<T>(
+        _ body: (UnsafePointer<CChar>, CInt) throws -> T
+    ) rethrows -> T {
+        try withUTF8 { utf8 in
+            guard let baseAddress = utf8.baseAddress else {
+                // Empty string: yield a non-nil pointer to the NUL string
+                // terminator, so that functions such as sqlite3_bind_text()
+                // unambiguously interpret it as the empty string.
+                return try withUnsafePointer(to: 0 as CChar) {
+                    try body($0, 0)
+                }
+            }
+            return try baseAddress.withMemoryRebound(to: CChar.self, capacity: utf8.count) {
+                try body($0, CInt(utf8.count))
+            }
+        }
     }
 }
 
@@ -513,18 +681,19 @@ extension String: DatabaseValueConvertible, StatementColumnConvertible {
 // MARK: - SQL Functions
 
 extension DatabaseFunction {
-    /// An SQL function that returns the Swift built-in capitalized
-    /// String property.
+    /// An SQL function that calls the Foundation
+    /// `String.capitalized` property.
     ///
-    /// The function returns NULL for non-strings values.
+    /// `NULL` is returned for non-string values.
     ///
     /// This function is automatically added by GRDB to your database
     /// connections. It is the function used by the query interface's
-    /// capitalized:
+    /// ``SQLSpecificExpressible/capitalized``:
     ///
-    ///     let nameColumn = Column("name")
-    ///     let request = Player.select(nameColumn.capitalized)
-    ///     let names = try String.fetchAll(dbQueue, request)   // [String]
+    /// ```swift
+    /// let request = Player.select { $0.name.capitalized }
+    /// let names = try String.fetchAll(db, request) // [String]
+    /// ```
     public static let capitalize =
         DatabaseFunction("swiftCapitalizedString", argumentCount: 1, pure: true) { dbValues in
             guard let string = String.fromDatabaseValue(dbValues[0]) else {
@@ -533,18 +702,19 @@ extension DatabaseFunction {
             return string.capitalized
         }
     
-    /// An SQL function that returns the Swift built-in lowercased
-    /// String property.
+    /// An SQL function that calls the Swift
+    /// `String.lowercased()` method.
     ///
-    /// The function returns NULL for non-strings values.
+    /// `NULL` is returned for non-string values.
     ///
     /// This function is automatically added by GRDB to your database
     /// connections. It is the function used by the query interface's
-    /// lowercased:
+    /// ``SQLSpecificExpressible/lowercased``:
     ///
-    ///     let nameColumn = Column("name")
-    ///     let request = Player.select(nameColumn.lowercased())
-    ///     let names = try String.fetchAll(dbQueue, request)   // [String]
+    /// ```swift
+    /// let request = Player.select { $0.name.lowercased }
+    /// let names = try String.fetchAll(db, request) // [String]
+    /// ```
     public static let lowercase =
         DatabaseFunction("swiftLowercaseString", argumentCount: 1, pure: true) { dbValues in
             guard let string = String.fromDatabaseValue(dbValues[0]) else {
@@ -553,18 +723,19 @@ extension DatabaseFunction {
             return string.lowercased()
         }
     
-    /// An SQL function that returns the Swift built-in uppercased
-    /// String property.
+    /// An SQL function that calls the Swift
+    /// `String.uppercased()` method.
     ///
-    /// The function returns NULL for non-strings values.
+    /// `NULL` is returned for non-string values.
     ///
     /// This function is automatically added by GRDB to your database
     /// connections. It is the function used by the query interface's
-    /// uppercased:
+    /// ``SQLSpecificExpressible/uppercased``:
     ///
-    ///     let nameColumn = Column("name")
-    ///     let request = Player.select(nameColumn.uppercased())
-    ///     let names = try String.fetchAll(dbQueue, request)   // [String]
+    /// ```swift
+    /// let request = Player.select { $0.name.uppercased }
+    /// let names = try String.fetchAll(db, request) // [String]
+    /// ```
     public static let uppercase =
         DatabaseFunction("swiftUppercaseString", argumentCount: 1, pure: true) { dbValues in
             guard let string = String.fromDatabaseValue(dbValues[0]) else {
@@ -572,22 +743,20 @@ extension DatabaseFunction {
             }
             return string.uppercased()
         }
-}
 
-extension DatabaseFunction {
-    /// An SQL function that returns the Swift built-in
-    /// localizedCapitalized String property.
+    /// An SQL function that calls the Foundation
+    /// `String.localizedCapitalized` property.
     ///
-    /// The function returns NULL for non-strings values.
+    /// `NULL` is returned for non-string values.
     ///
     /// This function is automatically added by GRDB to your database
     /// connections. It is the function used by the query interface's
-    /// localizedCapitalized:
+    /// ``SQLSpecificExpressible/localizedCapitalized``:
     ///
-    ///     let nameColumn = Column("name")
-    ///     let request = Player.select(nameColumn.localizedCapitalized)
-    ///     let names = try String.fetchAll(dbQueue, request)   // [String]
-    @available(OSX 10.11, watchOS 3.0, *)
+    /// ```swift
+    /// let request = Player.select { $0.name.localizedCapitalized }
+    /// let names = try String.fetchAll(db, request) // [String]
+    /// ```
     public static let localizedCapitalize =
         DatabaseFunction("swiftLocalizedCapitalizedString", argumentCount: 1, pure: true) { dbValues in
             guard let string = String.fromDatabaseValue(dbValues[0]) else {
@@ -596,19 +765,20 @@ extension DatabaseFunction {
             return string.localizedCapitalized
         }
     
-    /// An SQL function that returns the Swift built-in
-    /// localizedLowercased String property.
+    
+    /// An SQL function that calls the Foundation
+    /// `String.localizedLowercase` property.
     ///
-    /// The function returns NULL for non-strings values.
+    /// `NULL` is returned for non-string values.
     ///
     /// This function is automatically added by GRDB to your database
     /// connections. It is the function used by the query interface's
-    /// localizedLowercased:
+    /// ``SQLSpecificExpressible/localizedLowercased``:
     ///
-    ///     let nameColumn = Column("name")
-    ///     let request = Player.select(nameColumn.localizedLowercased)
-    ///     let names = try String.fetchAll(dbQueue, request)   // [String]
-    @available(OSX 10.11, watchOS 3.0, *)
+    /// ```swift
+    /// let request = Player.select { $0.name.localizedLowercased }
+    /// let names = try String.fetchAll(db, request) // [String]
+    /// ```
     public static let localizedLowercase =
         DatabaseFunction("swiftLocalizedLowercaseString", argumentCount: 1, pure: true) { dbValues in
             guard let string = String.fromDatabaseValue(dbValues[0]) else {
@@ -617,19 +787,19 @@ extension DatabaseFunction {
             return string.localizedLowercase
         }
     
-    /// An SQL function that returns the Swift built-in
-    /// localizedUppercased String property.
+    /// An SQL function that calls the Foundation
+    /// `String.localizedUppercase` property.
     ///
-    /// The function returns NULL for non-strings values.
+    /// `NULL` is returned for non-string values.
     ///
     /// This function is automatically added by GRDB to your database
     /// connections. It is the function used by the query interface's
-    /// localizedUppercased:
+    /// ``SQLSpecificExpressible/localizedUppercased``:
     ///
-    ///     let nameColumn = Column("name")
-    ///     let request = Player.select(nameColumn.localizedUppercased)
-    ///     let names = try String.fetchAll(dbQueue, request)   // [String]
-    @available(OSX 10.11, watchOS 3.0, *)
+    /// ```swift
+    /// let request = Player.select { $0.name.localizedUppercased }
+    /// let names = try String.fetchAll(db, request) // [String]
+    /// ```
     public static let localizedUppercase =
         DatabaseFunction("swiftLocalizedUppercaseString", argumentCount: 1, pure: true) { dbValues in
             guard let string = String.fromDatabaseValue(dbValues[0]) else {
@@ -654,96 +824,146 @@ extension DatabaseCollation {
     // collation names with sqlite3_collation_needed().
     // See https://www.sqlite.org/capi3ref.html#sqlite3_collation_needed
     
-    /// A collation, or SQL string comparison function, that compares strings
-    /// according to the the Swift built-in == and <= operators.
+    /// A collation that compares strings according to the built-in `==` and
+    /// `<=` operators of the Swift String.
     ///
     /// This collation is automatically added by GRDB to your database
     /// connections.
     ///
-    /// You can use it when creating database tables:
+    /// You can use the collation when creating database tables:
     ///
-    ///     let collationName = DatabaseCollation.caseInsensitiveCompare.name
-    ///     dbQueue.execute(sql: """
-    ///         CREATE TABLE players (
-    ///           name TEXT COLLATE \(collationName)
-    ///         )
-    ///         """)
+    /// ```swift
+    /// try db.create(table: "player") { t in
+    ///     t.column("name", .text).collate(.unicodeCompare)
+    /// }
+    /// ```
+    ///
+    /// Embed the collation name in your raw SQL queries:
+    ///
+    /// ```swift
+    /// let collationName = DatabaseCollation.unicodeCompare.name
+    /// try db.execute(sql: """
+    ///     CREATE TABLE player (
+    ///       name TEXT COLLATE \(collationName)
+    ///     )
+    ///     """)
+    /// ```
     public static let unicodeCompare =
         DatabaseCollation("swiftCompare") { (lhs, rhs) in
             (lhs < rhs) ? .orderedAscending : ((lhs == rhs) ? .orderedSame : .orderedDescending)
         }
     
-    /// A collation, or SQL string comparison function, that compares strings
-    /// according to the the Swift built-in caseInsensitiveCompare(_:) method.
+    /// A collation that compares strings according to the Foundation
+    /// `String.caseInsensitiveCompare(_:)` method.
     ///
     /// This collation is automatically added by GRDB to your database
     /// connections.
     ///
-    /// You can use it when creating database tables:
+    /// You can use the collation when creating database tables:
     ///
-    ///     let collationName = DatabaseCollation.caseInsensitiveCompare.name
-    ///     dbQueue.execute(sql: """
-    ///         CREATE TABLE players (
-    ///           name TEXT COLLATE \(collationName)
-    ///         )
-    ///         """)
+    /// ```swift
+    /// try db.create(table: "player") { t in
+    ///     t.column("name", .text).collate(.caseInsensitiveCompare)
+    /// }
+    /// ```
+    ///
+    /// Embed the collation name in your raw SQL queries:
+    ///
+    /// ```swift
+    /// let collationName = DatabaseCollation.caseInsensitiveCompare.name
+    /// try db.execute(sql: """
+    ///     CREATE TABLE player (
+    ///       name TEXT COLLATE \(collationName)
+    ///     )
+    ///     """)
+    /// ```
     public static let caseInsensitiveCompare =
         DatabaseCollation("swiftCaseInsensitiveCompare") { (lhs, rhs) in
             lhs.caseInsensitiveCompare(rhs)
         }
     
-    /// A collation, or SQL string comparison function, that compares strings
-    /// according to the the Swift built-in localizedCaseInsensitiveCompare(_:) method.
+    /// A collation that compares strings according to the Foundation
+    /// `String.localizedCaseInsensitiveCompare(_:)` method.
     ///
     /// This collation is automatically added by GRDB to your database
     /// connections.
     ///
-    /// You can use it when creating database tables:
+    /// You can use the collation when creating database tables:
     ///
-    ///     let collationName = DatabaseCollation.localizedCaseInsensitiveCompare.name
-    ///     dbQueue.execute(sql: """
-    ///         CREATE TABLE players (
-    ///           name TEXT COLLATE \(collationName)
-    ///         )
-    ///         """)
+    /// ```swift
+    /// try db.create(table: "player") { t in
+    ///     t.column("name", .text).collate(.localizedCaseInsensitiveCompare)
+    /// }
+    /// ```
+    ///
+    /// Embed the collation name in your raw SQL queries:
+    ///
+    /// ```swift
+    /// let collationName = DatabaseCollation.localizedCaseInsensitiveCompare.name
+    /// try db.execute(sql: """
+    ///     CREATE TABLE player (
+    ///       name TEXT COLLATE \(collationName)
+    ///     )
+    ///     """)
+    /// ```
     public static let localizedCaseInsensitiveCompare =
         DatabaseCollation("swiftLocalizedCaseInsensitiveCompare") { (lhs, rhs) in
             lhs.localizedCaseInsensitiveCompare(rhs)
         }
     
-    /// A collation, or SQL string comparison function, that compares strings
-    /// according to the the Swift built-in localizedCompare(_:) method.
+    /// A collation that compares strings according to the Foundation
+    /// `String.localizedCompare(_:)` method.
     ///
     /// This collation is automatically added by GRDB to your database
     /// connections.
     ///
-    /// You can use it when creating database tables:
+    /// You can use the collation when creating database tables:
     ///
-    ///     let collationName = DatabaseCollation.localizedCompare.name
-    ///     dbQueue.execute(sql: """
-    ///         CREATE TABLE players (
-    ///           name TEXT COLLATE \(collationName)
-    ///         )
-    ///         """)
+    /// ```swift
+    /// try db.create(table: "player") { t in
+    ///     t.column("name", .text).collate(.localizedCompare)
+    /// }
+    /// ```
+    ///
+    /// Embed the collation name in your raw SQL queries:
+    ///
+    /// ```swift
+    /// let collationName = DatabaseCollation.localizedCompare.name
+    /// try db.execute(sql: """
+    ///     CREATE TABLE player (
+    ///       name TEXT COLLATE \(collationName)
+    ///     )
+    ///     """)
+    /// ```
     public static let localizedCompare =
         DatabaseCollation("swiftLocalizedCompare") { (lhs, rhs) in
             lhs.localizedCompare(rhs)
         }
     
-    /// A collation, or SQL string comparison function, that compares strings
-    /// according to the the Swift built-in localizedStandardCompare(_:) method.
+    /// A collation that compares strings according to the Foundation
+    /// `String.localizedStandardCompare(_:)` method.
     ///
     /// This collation is automatically added by GRDB to your database
     /// connections.
     ///
-    /// You can use it when creating database tables:
+    /// You can use the collation when creating database tables:
     ///
-    ///     let collationName = DatabaseCollation.localizedStandardCompare.name
-    ///     dbQueue.execute(sql: """
-    ///         CREATE TABLE players (
-    ///           name TEXT COLLATE \(collationName)
-    ///         )
-    ///         """)
+    /// ```swift
+    /// try db.create(table: "player") { t in
+    ///     t.column("name", .text).collate(.localizedStandardCompare)
+    /// }
+    /// ```
+    ///
+    /// Embed the collation name in your raw SQL queries:
+    ///
+    /// ```swift
+    /// let collationName = DatabaseCollation.localizedStandardCompare.name
+    /// try db.execute(sql: """
+    ///     CREATE TABLE player (
+    ///       name TEXT COLLATE \(collationName)
+    ///     )
+    ///     """)
+    /// ```
     public static let localizedStandardCompare =
         DatabaseCollation("swiftLocalizedStandardCompare") { (lhs, rhs) in
             lhs.localizedStandardCompare(rhs)

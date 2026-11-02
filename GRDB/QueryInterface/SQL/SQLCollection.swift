@@ -39,7 +39,7 @@ struct SQLCollection {
 
 extension SQLCollection {
     /// Returns a qualified collection.
-    func qualified(with alias: TableAlias) -> SQLCollection {
+    func qualified(with alias: TableAliasBase) -> SQLCollection {
         switch impl {
         case .subquery,
              .table:
@@ -91,7 +91,7 @@ extension SQLCollection {
         }
     }
     
-    /// Returns an expression that check whether the collection contains
+    /// Returns an expression that checks whether the collection contains
     /// the expression.
     func contains(_ value: SQLExpression) -> SQLExpression {
         switch impl {
@@ -101,6 +101,7 @@ extension SQLCollection {
             
         case let .array(expressions):
             guard let expression = expressions.first else {
+                // [].contains(...) -> false
                 return false.sqlExpression
             }
                         

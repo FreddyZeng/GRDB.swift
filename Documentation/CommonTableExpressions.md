@@ -16,7 +16,7 @@ In this guide, you will learn how to:
 - [Fetch Values From Common Table Expressions]
 - Join CTEs with [Associations to Common Table Expressions]
 
-> :point_up: **Note**: most code examples will be trivial, and not very "useful". This is because the goal of this guide is to stay focused on the GRDB support for CTEs. Rich setup would just be distracting. So bring your own good ideas with you!
+> **Note**: most code examples will be trivial, and not very "useful". This is because the goal of this guide is to stay focused on the GRDB support for CTEs. Rich setup would just be distracting. So bring your own good ideas with you!
 
 
 ## Define Common Table Expressions
@@ -31,7 +31,7 @@ The CTE request can be provided as a [query interface request]:
 // WITH playerName AS (SELECT name FROM player) ...
 let playerNameCTE = CommonTableExpression(
     named: "playerName", 
-    request: Player.select(Column("name")))
+    request: Player.select(\.name))
 ```
 
 You can feed a CTE with raw SQL as well (second and third examples use [SQL Interpolation]):
@@ -82,7 +82,7 @@ let counterCTE = CommonTableExpression(
         """)
 ```
 
-> :point_up: **Note**: many recursive CTEs use the `UNION ALL` SQL operator. The query interface does not provide any Swift support for it, so you'll generally have to write SQL in your definitions of recursive CTEs.
+> **Note**: many recursive CTEs use the `UNION ALL` SQL operator. The query interface does not provide any Swift support for it, so you'll generally have to write SQL in your definitions of recursive CTEs.
 
 
 ## Embed Common Table Expressions in Requests
@@ -123,16 +123,16 @@ And we can then filter the `player` table with a subquery:
 // WHERE name = (SELECT * FROM playerName)
 let request = Player
     .with(playerNameCTE)
-    .filter(Column("name") == playerNameCTE.all())
+    .filter { $0.name == playerNameCTE.all() }
 ```
 
-> :point_up: **Note**: the `with(_:)` method can be called as many times as a there are common table expressions in your request.
+> **Note**: the `with(_:)` method can be called as many times as there are common table expressions in your request.
 >
-> :point_up: **Note**: the `with(_:)` method can be called at any time, as all request methods: `Player.with(...).filter(...).with(...)`.
+> **Note**: the `with(_:)` method can be called at any time, like all request methods: `Player.with(...).filter(...).with(...)`.
 >
-> :point_up: **Note**: the `with(_:)` method replaces any previously embedded CTE that has the same table name. This allows you to embed the same CTE several times if you feel like it.
+> **Note**: the `with(_:)` method replaces any previously embedded CTE that has the same table name. This allows you to embed the same CTE several times if you feel like it.
 >
-> :point_up: **Note**: the `CommonTableExpression.all()` method builds a regular [query interface request] for the content of the CTE (like `SELECT * FROM <cte name>`, not to be mismatched with the request that was used to define the CTE). You can filter this request, sort it, etc, like all query interface requests:
+> **Note**: the `CommonTableExpression.all()` method builds a regular [query interface request] for the content of the CTE (like `SELECT * FROM <cte name>`, not to be confused with the request that was used to define the CTE). You can filter this request, sort it, etc, like all query interface requests:
 >
 > ```swift
 > cte.all().select(...).filter(...).group(...).order(...)
@@ -167,13 +167,13 @@ Common table expressions can also be used as subqueries, when you update or dele
 // UPDATE player SET name = (SELECT * FROM playerName)
 try Player
     .with(playerNameCTE)
-    .updateAll(db, Column("name").set(to: playerNameCTE.all()))
+    .updateAll(db) { $0.name.set(to: playerNameCTE.all()) }
     
 // WITH playerName AS (SELECT 'O''Brien')
 // DELETE FROM player WHERE name = (SELECT * FROM playerName)
 try Player
     .with(playerNameCTE)
-    .filter(Column("name") == playerNameCTE.all())
+    .filter { $0.name == playerNameCTE.all() }
     .deleteAll(db)
 ```
 
@@ -234,7 +234,7 @@ Parent.including(optional: childAssociation)
 Parent.including(required: childAssociation)
 ```
 
-> :point_up: **Note**: common table expressions currently only define "to-one" associations, so the `including(all:)` joining method is unavailable.
+> **Note**: common table expressions currently only define "to-one" associations, so the `including(all:)` joining method is unavailable.
 
 CTE associations are generally built with the `association(to:on:)` method, which needs:
 
@@ -251,7 +251,7 @@ let rightCTE = ...
 let association = LeftRecord.association(
     to: rightCTE, 
     on: { left, right in
-        left[Column("x")] = right[Column("y")]
+        left[Column("x")] == right[Column("y")]
     })
 ```
 
@@ -270,7 +270,7 @@ LeftRecord
 
 ### CTE Association Example: a Chat App
 
-As an example, let's build the classical main screen of a chat application: a list of all latest messages from all conversations.
+As an example, let's build the classic main screen of a chat application: a list of all latest messages from all conversations.
 
 The database schema of the chat app contains a `chat` and a `message` table. The application defines the following records:
 
@@ -281,9 +281,15 @@ struct Chat: Codable, FetchableRecord, PersistableRecord {
 }
 
 struct Message: Codable, FetchableRecord, PersistableRecord {
-    var chatID: Int64
+    var chatId: Int64
     var date: Date
     ...
+    
+    enum Columns {
+        static let chatId = Column("chatId")
+        static let date = Column("date")
+        ...
+    }
 }
 ```
 
@@ -315,8 +321,8 @@ We start by defining the CTE request, which loads the latest messages of all cha
 ```swift
 // SELECT *, MAX(date) FROM message GROUP BY chatID
 let latestMessageRequest = Message
-    .annotated(with: max(Column("date")))
-    .group(Column("chatID"))
+    .annotated { max($0.date) }
+    .group(\.chatId)
 ```
 
 We can now define the CTE for the latest messages:
@@ -324,7 +330,7 @@ We can now define the CTE for the latest messages:
 ```swift
 // WITH latestMessage AS
 //   (SELECT *, MAX(date) FROM message GROUP BY chatID)
-let latestMessageCTE = CommonTableExpression(
+let latestMessageCTE = CommonTableExpression<Message>(
     named: "latestMessage",
     request: latestMessageRequest)
 ```
@@ -337,9 +343,9 @@ The association from a chat to its latest message follows:
 let latestMessage = Chat.association(
     to: latestMessageCTE,
     on: { chat, latestMessage in
-        chat[Column("id")] == latestMessage[Column("chatID")]
+        chat.id == latestMessage.chatId
     })
-    .order(Column("date").desc)
+    .order(\.date.desc)
 ```
 
 The final request can now be defined:
@@ -362,7 +368,9 @@ And we can fetch the data that feeds our application screen:
 
 ```swift
 
-let chatInfos: [ChatInfos] = try dbQueue.read(request.fetchAll)
+let chatInfos: [ChatInfo] = try dbQueue.read { db in
+    try request.fetchAll(db)
+}
 ```
 
 > :bulb: **Tip**: the joining methods are generally type-safe: they won't allow you to join apples to oranges. This works when associations have a *precise* type. In this context, anonymous `CommonTableExpression` CTEs can work against type safety. When you want to define associations between several CTEs, and make sure the compiler will notice wrong uses of those associations, tag your common table expressions with an explicit type: `CommonTableExpression<SomeType>`.
@@ -387,8 +395,8 @@ let chatInfos: [ChatInfos] = try dbQueue.read(request.fetchAll)
 > // JOIN far ON ...
 > let request = BaseRecord
 >     .with(cte1).with(cte2)
->     .joining(required: assoc1.                     // OK
->         .joining(required: assoc2.                 // OK
+>     .joining(required: assoc1                      // OK
+>         .joining(required: assoc2                  // OK
 >             .joining(required: assoc3)))           // OK
 >
 > // Compiler error

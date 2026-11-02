@@ -10,7 +10,7 @@
 ///     let countryRequest = Country.filter(key: "FR")
 ///
 /// Both need a database connection in order to introspect the database schema,
-/// find the primary key of both table, and generate the correct SQL:
+/// find the primary key of both tables, and generate the correct SQL:
 ///
 ///     try dbQueue.read { db in
 ///         // SELECT * FROM player WHERE id = 1
@@ -23,22 +23,28 @@
 /// see SQLRelation.filterPromise.
 struct DatabasePromise<T> {
     /// Returns the resolved value.
-    let resolve: (Database) throws -> T
+    let resolve: @Sendable (Database) throws -> T
     
     /// Creates a promise that resolves to a value.
-    init(value: T) {
+    init(value: T) where T: Sendable {
         self.resolve = { _ in value }
     }
     
     /// Creates a promise from a closure.
-    init(_ resolve: @escaping (Database) throws -> T) {
+    init(_ resolve: @escaping @Sendable (Database) throws -> T) {
         self.resolve = resolve
     }
     
     /// Returns a promise whose value is transformed by the given closure.
-    func map<U>(_ transform: @escaping (T) throws -> U) -> DatabasePromise<U> {
+    func map<U>(_ transform: @escaping @Sendable (T) throws -> U) -> DatabasePromise<U> {
         DatabasePromise<U> { db in
-            try transform(self.resolve(db))
+            try transform(resolve(db))
         }
+    }
+}
+
+extension DatabasePromise: CustomStringConvertible {
+    var description: String {
+        "DatabasePromise<\(T.self)>"
     }
 }

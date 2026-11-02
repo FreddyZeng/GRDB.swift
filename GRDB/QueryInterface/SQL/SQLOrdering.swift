@@ -1,6 +1,18 @@
-/// The type that can be used as an SQL ordering term, as described at
-/// <https://www.sqlite.org/syntax/ordering-term.html>
-public struct SQLOrdering {
+/// An SQL ordering term.
+///
+/// `SQLOrdering` is an opaque representation of an SQL ordering term.
+/// You generally build `SQLOrdering` from other expressions. For example:
+///
+/// ```swift
+/// Column("score").desc
+/// SQL("score DESC").sqlOrdering
+/// ```
+///
+/// `SQLOrdering` is better used as the return type of a function. For
+/// function arguments, prefer the ``SQLOrderingTerm`` protocol.
+///
+/// Related SQLite documentation: <https://www.sqlite.org/syntax/ordering-term.html>
+public struct SQLOrdering: Sendable {
     private var impl: Impl
     
     private enum Impl {
@@ -14,7 +26,7 @@ public struct SQLOrdering {
         ///     ORDER BY score ASC
         case asc(SQLExpression)
         
-        /// An descending expression
+        /// A descending expression
         ///
         ///     ORDER BY score DESC
         case desc(SQLExpression)
@@ -74,7 +86,7 @@ extension SQLOrdering {
 }
 
 extension SQLOrdering {
-    func qualified(with alias: TableAlias) -> SQLOrdering {
+    func qualified(with alias: TableAliasBase) -> SQLOrdering {
         switch impl {
         case .expression(let expression):
             return .expression(expression.qualified(with: alias))
@@ -117,8 +129,15 @@ extension SQLOrdering {
 
 // MARK: - SQLOrderingTerm
 
-/// The protocol for all types that can be used as an SQL ordering term, as
-/// described at <https://www.sqlite.org/syntax/ordering-term.html>
+/// A type that can be used as an SQL ordering term.
+///
+/// Related SQLite documentation <https://www.sqlite.org/syntax/ordering-term.html>
+///
+/// ## Topics
+///
+/// ### Supporting Type
+///
+/// - ``SQLOrdering``
 public protocol SQLOrderingTerm {
     /// Returns an SQL ordering.
     var sqlOrdering: SQLOrdering { get }

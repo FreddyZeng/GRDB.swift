@@ -1,6 +1,21 @@
-/// The type that can be selected, as described at
-/// <https://www.sqlite.org/syntax/result-column.html>
-public struct SQLSelection {
+/// An SQL result column.
+///
+/// `SQLSelection` is an opaque representation of an SQL result column.
+/// You generally build `SQLSelection` from other expressions. For example:
+///
+/// ```swift
+/// // Aliased expressions
+/// (Column("score") + Column("bonus")).forKey("total")
+///
+/// // Literal selection
+/// SQL("IFNULL(name, \(defaultName)) AS name").sqlSelection
+/// ```
+///
+/// `SQLSelection` is better used as the return type of a function. For
+/// function arguments, prefer the ``SQLSelectable`` protocol.
+///
+/// Related SQLite documentation: <https://www.sqlite.org/syntax/result-column.html>
+public struct SQLSelection: Sendable {
     private var impl: Impl
     
     /// The private implementation of the public `SQLSelection`.
@@ -9,8 +24,14 @@ public struct SQLSelection {
         case allColumns
         
         /// All columns, qualified: `player.*`
-        case qualifiedAllColumns(TableAlias)
+        case qualifiedAllColumns(TableAliasBase)
         
+        /// All columns but the specified ones
+        case allColumnsExcluding(Set<CaseInsensitiveIdentifier>)
+        
+        /// All columns but the specified ones, qualified.
+        case qualifiedAllColumnsExcluding(TableAliasBase, Set<CaseInsensitiveIdentifier>)
+
         /// An expression
         case expression(SQLExpression)
         
@@ -26,9 +47,22 @@ public struct SQLSelection {
     /// All columns: `*`
     static let allColumns = SQLSelection(impl: .allColumns)
     
+    /// All columns but the specified ones.
+    static func allColumnsExcluding(_ excludedColumns: Set<CaseInsensitiveIdentifier>) -> Self {
+        SQLSelection(impl: .allColumnsExcluding(excludedColumns))
+    }
+    
     /// All columns, qualified: `player.*`
-    static func qualifiedAllColumns(_ alias: TableAlias) -> Self {
+    static func qualifiedAllColumns(_ alias: TableAliasBase) -> Self {
         self.init(impl: .qualifiedAllColumns(alias))
+    }
+    
+    /// All columns but the specified ones, qualified.
+    static func qualifiedAllColumnsExcluding(
+        _ alias: TableAliasBase,
+        _ excludedColumns: Set<CaseInsensitiveIdentifier>
+    ) -> Self {
+        self.init(impl: .qualifiedAllColumnsExcluding(alias, excludedColumns))
     }
     
     /// An expression
@@ -55,13 +89,16 @@ extension SQLSelection {
     /// Returns nil when the number of columns is unknown.
     func columnCount(_ context: SQLGenerationContext) throws -> Int? {
         switch impl {
-        case .allColumns:
+        case .allColumns, .allColumnsExcluding:
             // Likely a GRDB bug: we can't count the number of columns in an
             // unqualified table.
             return nil
             
         case let .qualifiedAllColumns(alias):
-            return try context.columnCount(in: alias.tableName)
+            return try context.columnCount(in: alias.tableName, excluding: [])
+            
+        case let .qualifiedAllColumnsExcluding(alias, excludedColumns):
+            return try context.columnCount(in: alias.tableName, excluding: excludedColumns)
             
         case .expression,
              .aliasedExpression:
@@ -71,25 +108,6 @@ extension SQLSelection {
             // We do not embed any SQL parser: we can't count the number of
             // columns in a literal selection.
             return nil
-        }
-    }
-    
-    /// TODO: remove when `count(_ counted: SQLSelectable)` is removed.
-    var countExpression: SQLExpression {
-        switch impl {
-        case .allColumns:
-            return .countAll
-            
-        case .qualifiedAllColumns:
-            // COUNT(player.*) is not valid SQL
-            fatalError("Uncountable selection")
-            
-        case let .expression(expression),
-             let .aliasedExpression(expression, _):
-            return .count(expression)
-            
-        case let .literal(sqlLiteral):
-            return .count(sqlLiteral.sqlExpression)
         }
     }
     
@@ -108,7 +126,28 @@ extension SQLSelection {
             // SELECT COUNT(*) FROM tableName ...
             return .all
             
-        case .qualifiedAllColumns:
+        case .allColumnsExcluding:
+            // SELECT DISTINCT a, b, c FROM tableName ...
+            if distinct {
+                // TODO: if the selection were qualified, and if we had a
+                // database connection, we could detect the case where there
+                // remains only one column, and we could perform a
+                // SELECT COUNT(DISTINCT remainingColumn) FROM tableName
+                //
+                // Since most people will not use `.allColumns(excluding:)`
+                // when they want to select only one column, I guess that
+                // this optimization has little chance to be needed.
+                //
+                // Can't count
+                return nil
+            }
+            
+            // SELECT a, b, c FROM tableName ...
+            // ->
+            // SELECT COUNT(*) FROM tableName ...
+            return .all
+            
+        case .qualifiedAllColumns, .qualifiedAllColumnsExcluding:
             return nil
             
         case let .expression(expression),
@@ -130,41 +169,6 @@ extension SQLSelection {
         }
     }
     
-    /// Returns the SQL that feeds the argument of the `COUNT` function.
-    ///
-    /// For example:
-    ///
-    ///     COUNT(*)
-    ///     COUNT(id)
-    ///           ^---- countedSQL
-    ///
-    /// - parameter context: An SQL generation context which accepts
-    ///   statement arguments.
-    func countedSQL(_ context: SQLGenerationContext) throws -> String {
-        switch impl {
-        case .allColumns:
-            return "*"
-            
-        case let .qualifiedAllColumns(alias):
-            if context.qualifier(for: alias) != nil {
-                // SELECT COUNT(t.*) is invalid SQL
-                fatalError("Not implemented, or invalid query")
-            }
-            return "*"
-            
-        case let .expression(expression),
-             let .aliasedExpression(expression, _):
-            return try expression.sql(context)
-            
-        case .literal:
-            fatalError("""
-                Selection literals can't be counted. \
-                To resolve this error, select one or several literal expressions instead. \
-                See SQL.sqlExpression.
-                """)
-        }
-    }
-    
     /// Returns the SQL that feeds the selection of a `SELECT` statement.
     ///
     /// For example:
@@ -183,11 +187,38 @@ extension SQLSelection {
         case .allColumns:
             return "*"
             
+        case .allColumnsExcluding:
+            // Likely a GRDB bug: we don't know the table name so we can't
+            // load remaining columns. This selection should have been
+            // turned into a `.qualifiedAllColumnsExcluding`.
+            fatalError("Not implemented, or invalid query")
+            
         case let .qualifiedAllColumns(alias):
             if let qualifier = context.qualifier(for: alias) {
                 return qualifier.quotedDatabaseIdentifier + ".*"
             }
             return "*"
+        
+        case let .qualifiedAllColumnsExcluding(alias, excludedColumns):
+            let columnsNames = try context.columnNames(in: alias.tableName)
+            let remainingColumnsNames = if excludedColumns.isEmpty {
+                columnsNames
+            } else {
+                columnsNames.filter {
+                    !excludedColumns.contains(CaseInsensitiveIdentifier(rawValue: $0))
+                }
+            }
+            if columnsNames.count == remainingColumnsNames.count {
+                // We're not excluding anything
+                if let qualifier = context.qualifier(for: alias) {
+                    return qualifier.quotedDatabaseIdentifier + ".*"
+                }
+                return "*"
+            } else {
+                return try remainingColumnsNames
+                    .map { try SQLExpression.column($0).qualified(with: alias).sql(context) }
+                    .joined(separator: ", ")
+            }
             
         case let .expression(expression):
             return try expression.sql(context)
@@ -230,13 +261,16 @@ extension SQLSelection {
     }
     
     /// Returns a qualified selection
-    func qualified(with alias: TableAlias) -> SQLSelection {
+    func qualified(with alias: TableAliasBase) -> SQLSelection {
         switch impl {
-        case .qualifiedAllColumns:
+        case .qualifiedAllColumns, .qualifiedAllColumnsExcluding:
             return self
             
         case .allColumns:
             return .qualifiedAllColumns(alias)
+            
+        case let .allColumnsExcluding(excludedColumns):
+            return .qualifiedAllColumnsExcluding(alias, excludedColumns)
             
         case let .expression(expression):
             return .expression(expression.qualified(with: alias))
@@ -248,12 +282,36 @@ extension SQLSelection {
             return .literal(sqlLiteral.qualified(with: alias))
         }
     }
+    
+    /// Returns whether this selection MUST be counted with a "trivial"
+    /// count: `SELECT COUNT(*) FROM (SELECT ...)`.
+    ///
+    /// Supports SQLRelation.fetchCount.
+    ///
+    /// See <https://github.com/groue/GRDB.swift/issues/1357>
+    var requiresTrivialCount: Bool {
+        switch impl {
+        case .aliasedExpression, .literal:
+            // Trivial count is required.
+            //
+            // For example, the WHERE clause here requires the aliased
+            // column to be preserved in the counting request:
+            // SELECT *, column AS alt FROM player WHERE alt
+            return true
+        case .allColumns, .qualifiedAllColumns:
+            return false
+        case .allColumnsExcluding, .qualifiedAllColumnsExcluding:
+            return false
+        case .expression:
+            return false
+        }
+    }
 }
 
-extension Array where Element == SQLSelection {
+extension [SQLSelection] {
     /// Returns the number of columns in the selection.
     ///
-    /// This method raises a fatal error if the selection contains a literal,
+    /// This method raises a fatal error if the selection contains a literal.
     ///
     /// See `SQLSelection.columnCount(_:)` for testability.
     func columnCount(_ context: SQLGenerationContext) throws -> Int {
@@ -283,11 +341,45 @@ enum SQLCount {
 
 // MARK: - SQLSelectable
 
-/// SQLSelectable is the protocol for types that can be selected, as
-/// described at <https://www.sqlite.org/syntax/result-column.html>
+/// A type that can be used as SQL result columns.
+///
+/// Related SQLite documentation <https://www.sqlite.org/syntax/result-column.html>
+///
+/// ## Topics
+///
+/// ### Standard Selections
+///
+/// - ``rowID``
+/// - ``allColumns``
+/// - ``allColumns(excluding:)-3sg4w``
+/// - ``allColumns(excluding:)-3blq4``
+///
+/// ### Supporting Types
+///
+/// - ``AllColumns``
+/// - ``AllColumnsExcluding``
+/// - ``SQLSelection``
 public protocol SQLSelectable {
     /// Returns an SQL selection.
     var sqlSelection: SQLSelection { get }
+}
+
+extension SQLSelectable where Self == Column {
+    /// The hidden rowID column.
+    ///
+    /// For example:
+    ///
+    /// ```swift
+    /// struct Player: FetchableRecord, TableRecord {
+    ///     static var databaseSelection: [any SQLSelectable] {
+    ///         [.allColumns, .rowID]
+    ///     }
+    /// }
+    ///
+    /// // SELECT *, rowid FROM player
+    /// Player.fetchAll(db)
+    /// ```
+    public static var rowID: Self { Column.rowID }
 }
 
 extension SQLSelection: SQLSelectable {
@@ -298,30 +390,116 @@ extension SQLSelection: SQLSelectable {
 
 // MARK: - AllColumns
 
-/// AllColumns is the `*` in `SELECT *`.
-///
-/// You use AllColumns in your custom implementation of
-/// TableRecord.databaseSelection.
+/// `AllColumns` is the `*` in `SELECT *`.
 ///
 /// For example:
 ///
-///     struct Player : TableRecord {
-///         static var databaseTableName = "player"
-///         static let databaseSelection: [SQLSelectable] = [AllColumns(), Column.rowID]
+/// ```swift
+/// struct Player: FetchableRecord, TableRecord {
+///     static var databaseSelection: [any SQLSelectable] {
+///         [.allColumns, .rowID]
 ///     }
+/// }
 ///
-///     // SELECT *, rowid FROM player
-///     let request = Player.all()
-public struct AllColumns: SQLSelectable {
+/// // SELECT *, rowid FROM player
+/// Player.fetchAll(db)
+/// ```
+public struct AllColumns: Sendable {
     /// The `*` selection.
+    public init() { }
+}
+
+extension AllColumns: SQLSelectable {
+    public var sqlSelection: SQLSelection {
+        .allColumns
+    }
+}
+
+extension SQLSelectable where Self == AllColumns {
+    /// All columns of the requested table.
     ///
     /// For example:
     ///
-    ///     // SELECT * FROM player
-    ///     Player.select(AllColumns())
-    public init() { }
+    /// ```swift
+    /// struct Player: FetchableRecord, TableRecord {
+    ///     static var databaseSelection: [any SQLSelectable] {
+    ///         [.allColumns, .rowID]
+    ///     }
+    /// }
+    ///
+    /// // SELECT *, rowid FROM player
+    /// Player.fetchAll(db)
+    /// ```
+    public static var allColumns: AllColumns { AllColumns() }
+}
+
+// MARK: - AllColumnsExcluding
+
+/// `AllColumnsExcluding` selects all columns in a database table, but the
+/// ones you specify.
+///
+/// For example:
+///
+/// ```swift
+/// struct Player: TableRecord {
+///     static var databaseSelection: [any SQLSelectable] {
+///         [.allColumns(excluding: ["generatedColumn"])]
+///     }
+/// }
+///
+/// // SELECT id, name, score FROM player
+/// Player.fetchAll(db)
+/// ```
+public struct AllColumnsExcluding: Sendable {
+    var excludedColumns: Set<CaseInsensitiveIdentifier>
     
+    public init(_ excludedColumns: some Collection<String>) {
+        self.excludedColumns = Set(excludedColumns.lazy.map {
+            CaseInsensitiveIdentifier(rawValue: $0)
+        })
+    }
+}
+
+extension AllColumnsExcluding: SQLSelectable {
     public var sqlSelection: SQLSelection {
-        .allColumns
+        .allColumnsExcluding(excludedColumns)
+    }
+}
+
+extension SQLSelectable where Self == AllColumnsExcluding {
+    /// All columns of the requested table, excluding the provided columns.
+    ///
+    /// For example:
+    ///
+    /// ```swift
+    /// struct Player: TableRecord {
+    ///     static var databaseSelection: [any SQLSelectable] {
+    ///         [.allColumns(excluding: ["generatedColumn"])]
+    ///     }
+    /// }
+    ///
+    /// // SELECT id, name, score FROM player
+    /// Player.fetchAll(db)
+    /// ```
+    public static func allColumns(excluding excludedColumns: some Collection<String>) -> Self {
+        AllColumnsExcluding(excludedColumns)
+    }
+    
+    /// All columns of the requested table, excluding the provided columns.
+    ///
+    /// For example:
+    ///
+    /// ```swift
+    /// struct Player: TableRecord {
+    ///     static var databaseSelection: [any SQLSelectable] {
+    ///         [.allColumns(excluding: [Column("generatedColumn")])]
+    ///     }
+    /// }
+    ///
+    /// // SELECT id, name, score FROM player
+    /// Player.fetchAll(db)
+    /// ```
+    public static func allColumns(excluding excludedColumns: some Collection<any ColumnExpression>) -> Self {
+        AllColumnsExcluding(excludedColumns.map(\.name))
     }
 }

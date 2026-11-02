@@ -28,7 +28,6 @@ let books = try Book.fetchAll(db,
 ```
 
 - **[Choosing the Full-Text Engine](#choosing-the-full-text-engine)**
-- **[Enabling FTS5 Support](#enabling-fts5-support)**
 - **Create Full-Text Virtual Tables**: [FTS3/4](#create-fts3-and-fts4-virtual-tables), [FTS5](#create-fts5-virtual-tables)
 - **Choosing a Tokenizer**: [FTS3/4](#fts3-and-fts4-tokenizers), [FTS5](#fts5-tokenizers)
 - **Tokenization**: [FTS3/4](#fts3-and-fts4-tokenization), [FTS5](#fts5-tokenization)
@@ -79,22 +78,20 @@ Generally speaking, FTS5 is better than FTS4 which improves on FTS3. But this do
     
     For a full feature list, read the SQLite documentation. Some missing features can be achieved with extra application code.
     
-- **The speed versus disk space constraints.** Roughly speaking, FTS4 and FTS5 are faster than FTS3, but use more space. FTS4 only supports content compression.
+- **The speed versus disk space constraints.** Roughly speaking, FTS4 and FTS5 are faster than FTS3, but use more space. Only FTS4 supports content compression.
 
 - **The location of the indexed text in your database schema.** Only FTS4 and FTS5 support "contentless" and "external content" tables.
 
-- **The SQLite library integrated in your application.** The version of SQLite that ships with iOS, macOS, tvOS and watchOS supports FTS3 and FTS4 out of the box, but not always FTS5. To use FTS5, see [Enabling FTS5 Support](#enabling-fts5-support).
+- See [FTS3 vs. FTS4](https://www.sqlite.org/fts3.html#differences_between_fts3_and_fts4) and [FTS5 vs. FTS3/4](https://www.sqlite.org/fts5.html#appendix_a) for more differences.
 
-- See [FST3 vs. FTS4](https://www.sqlite.org/fts3.html#differences_between_fts3_and_fts4) and [FTS5 vs. FTS3/4](https://www.sqlite.org/fts5.html#appendix_a) for more differences.
-
-> :point_up: **Note**: In case you were still wondering, it is recommended to read the SQLite documentation: [FTS3 & FTS4](https://www.sqlite.org/fts3.html) and [FTS5](https://www.sqlite.org/fts5.html).
+> **Note**: In case you were still wondering, it is recommended to read the SQLite documentation: [FTS3 & FTS4](https://www.sqlite.org/fts3.html) and [FTS5](https://www.sqlite.org/fts5.html).
 
 
 ## Create FTS3 and FTS4 Virtual Tables
 
 **FTS3 and FTS4 full-text tables store and index textual content.**
 
-Create tables with the `create(virtualTable:using:)` method:
+Create tables with the `create(virtualTable:options:using:_:)` method:
 
 ```swift
 // CREATE VIRTUAL TABLE document USING fts3(content)
@@ -151,7 +148,7 @@ try db.create(virtualTable: "document", using: FTS4()) { t in
 }
 ```
 
-The `content` option is involved in "contentless" and "external content" full-text tables. GRDB can help you defining full-text tables that automatically synchronize with their content table. See [External Content Full-Text Tables](#external-content-full-text-tables).
+The `content` option is involved in "contentless" and "external content" full-text tables. GRDB can help you define full-text tables that automatically synchronize with their content table. See [External Content Full-Text Tables](#external-content-full-text-tables).
 
 
 See [SQLite documentation](https://www.sqlite.org/fts3.html) for more information.
@@ -257,7 +254,7 @@ FTS3.tokenize("Gustave Doré", withTokenizer: .unicode61()) // ["gustave", "dore
 
 **Not all search patterns are valid**: they must follow the [Full-Text Index Queries Grammar](https://www.sqlite.org/fts3.html#full_text_index_queries).
 
-The FTS3Pattern type helps you validating patterns, and building valid patterns from untrusted strings (such as strings typed by users):
+The FTS3Pattern type helps you validate patterns, and build valid patterns from untrusted strings (such as strings typed by users):
 
 ```swift
 struct FTS3Pattern {
@@ -304,7 +301,7 @@ let pattern = FTS3Pattern(matchingAnyTokenIn: "")  // nil
 let pattern = FTS3Pattern(matchingAnyTokenIn: "*") // nil
 ```
 
-FTS3Pattern are regular [values](../README.md#values). You can use them as query [arguments](http://groue.github.io/GRDB.swift/docs/5.24/Structs/StatementArguments.html):
+FTS3Pattern instances are regular [values](../README.md#values). You can use them as query [arguments](https://swiftpackageindex.com/groue/GRDB.swift/documentation/grdb/statementarguments):
 
 ```swift
 let documents = try Document.fetchAll(db,
@@ -319,42 +316,8 @@ Use them in the [query interface](../README.md#the-query-interface):
 let documents = try Document.matching(pattern).fetchAll(db)
 
 // Search in a specific column:
-let documents = try Document.filter(Column("content").match(pattern)).fetchAll(db)
+let documents = try Document.filter { $0.content.match(pattern) }.fetchAll(db)
 ```
-
-
-## Enabling FTS5 Support
-
-When the FTS3 and FTS4 full-text engines don't suit your needs, you may want to use FTS5. See [Choosing the Full-Text Engine](#choosing-the-full-text-engine) to help you make a decision.
-
-The version of SQLite that ships with iOS, macOS, tvOS and watchOS does not always support the FTS5 engine. To enable FTS5 support, you'll need to install GRDB with one of those installation techniques:
-
-1. Use the GRDB.swift CocoaPod with a custom compilation option, as below. It uses the system SQLite, which is compiled with FTS5 support, but only on iOS 11.4+ / macOS 10.13+ / tvOS 11.4+ / watchOS 4.3+:
-
-    ```ruby
-    pod 'GRDB.swift'
-    platform :ios, '11.4' # or above
-    
-    post_install do |installer|
-      installer.pods_project.targets.select { |target| target.name == "GRDB.swift" }.each do |target|
-        target.build_configurations.each do |config|
-          config.build_settings['OTHER_SWIFT_FLAGS'] = "$(inherited) -D SQLITE_ENABLE_FTS5"
-        end
-      end
-    end
-    ```
-    
-    > :warning: **Warning**: make sure you use the right platform version! You will get runtime errors on devices with a lower version.
-    
-    > :point_up: **Note**: there used to be a GRDBPlus CocoaPod with pre-enabled FTS5 support. This CocoaPod is deprecated: please switch to the above technique.
-
-2. Use the GRDB.swift/SQLCipher CocoaPod subspec (see [encryption](../README.md#encryption)):
-    
-    ```ruby
-    pod 'GRDB.swift/SQLCipher'
-    ```
-    
-3. Use a [custom SQLite build] and activate the `SQLITE_ENABLE_FTS5` compilation option.
 
 
 ## Create FTS5 Virtual Tables
@@ -363,7 +326,7 @@ The version of SQLite that ships with iOS, macOS, tvOS and watchOS does not alwa
 
 To use FTS5, you'll need a [custom SQLite build] that activates the `SQLITE_ENABLE_FTS5` compilation option.
 
-Create FTS5 tables with the `create(virtualTable:using:)` method:
+Create FTS5 tables with the `create(virtualTable:options:using:_:)` method:
 
 ```swift
 // CREATE VIRTUAL TABLE document USING fts5(content)
@@ -414,7 +377,7 @@ try db.create(virtualTable: "document", using: FTS5()) { t in
 }
 ```
 
-The `content` and `contentRowID` options are involved in "contentless" and "external content" full-text tables. GRDB can help you defining full-text tables that automatically synchronize with their content table. See [External Content Full-Text Tables](#external-content-full-text-tables).
+The `content` and `contentRowID` options are involved in "contentless" and "external content" full-text tables. GRDB can help you define full-text tables that automatically synchronize with their content table. See [External Content Full-Text Tables](#external-content-full-text-tables).
 
 See [SQLite documentation](https://www.sqlite.org/fts5.html) for more information.
 
@@ -530,7 +493,7 @@ See the `FTS5_TOKEN_*` flags in https://www.sqlite.org/fts5.html#custom_tokenize
 
 **Not all search patterns are valid**: they must follow the [Full-Text Query Syntax](https://www.sqlite.org/fts5.html#full_text_query_syntax).
 
-The FTS5Pattern type helps you validating patterns, and building valid patterns from untrusted strings (such as strings typed by users):
+The FTS5Pattern type helps you validate patterns, and build valid patterns from untrusted strings (such as strings typed by users):
 
 ```swift
 extension Database {
@@ -587,7 +550,7 @@ let pattern = FTS5Pattern(matchingAnyTokenIn: "")  // nil
 let pattern = FTS5Pattern(matchingAnyTokenIn: "*") // nil
 ```
 
-FTS5Pattern are regular [values](../README.md#values). You can use them as query [arguments](http://groue.github.io/GRDB.swift/docs/5.24/Structs/StatementArguments.html):
+FTS5Pattern instances are regular [values](../README.md#values). You can use them as query [arguments](https://swiftpackageindex.com/groue/GRDB.swift/documentation/grdb/statementarguments):
 
 ```swift
 let documents = try Document.fetchAll(db,
@@ -602,7 +565,7 @@ Use them in the [query interface](../README.md#the-query-interface):
 let documents = try Document.matching(pattern).fetchAll(db)
 
 // Search in a specific column:
-let documents = try Document.filter(Column("content").match(pattern)).fetchAll(db)
+let documents = try Document.filter { $0.content.match(pattern) }.fetchAll(db)
 ```
 
 
@@ -620,7 +583,7 @@ let documents = try Document.fetchAll(db,
 let documents = try Document.matching(pattern).order(Column.rank).fetchAll(db)
 ```
 
-For more information about the ranking algorithm, as well as extra options, read [Sorting by Auxiliary Function Results](https://www.sqlite.org/fts5.html#sorting_by_auxiliary_function_results)
+For more information about the ranking algorithm, as well as extra options, read [Sorting by Auxiliary Function Results](https://www.sqlite.org/fts5.html#sorting_by_auxiliary_function_results).
 
 GRDB does not provide any ranking for FTS3 and FTS4. See SQLite's [Search Application Tips](https://www.sqlite.org/fts3.html#appendix_a) if you really need it.
 
@@ -629,7 +592,7 @@ GRDB does not provide any ranking for FTS3 and FTS4. See SQLite's [Search Applic
 
 **An external content table does not store the indexed text.** Instead, it indexes the text stored in another table.
 
-This is very handy when you want to index a table that can not be declared as a full-text table (because it contains non-textual values, for example). You just have to define an external content full-text table that refers to the regular table.
+This is very handy when you want to index a table that cannot be declared as a full-text table (because it contains non-textual values, for example). You just have to define an external content full-text table that refers to the regular table.
 
 The two tables must be kept up-to-date, so that the full-text index matches the content of the regular table. This synchronization happens automatically if you use the `synchronize(withTable:)` method in your full-text table definition:
 
@@ -651,7 +614,7 @@ try db.create(virtualTable: "book_ft", using: FTS4()) { t in // or FTS5()
 }
 ```
 
-The eventual content already present in the regular table is indexed, and every insert, update or delete that happens in the regular table is automatically applied to the full-text index.
+Any content already present in the regular table is indexed, and every insert, update or delete that happens in the regular table is automatically applied to the full-text index.
 
 For more information, see the SQLite documentation about external content tables: [FTS4](https://www.sqlite.org/fts3.html#_external_content_fts4_tables_), [FTS5](https://sqlite.org/fts5.html#external_content_tables).
 
@@ -660,11 +623,11 @@ See also [WWDC Companion](https://github.com/groue/WWDCCompanion), a sample app 
 
 ### Deleting Synchronized Full-Text Tables
 
-Synchronization of full-text tables with their content table happens by the mean of SQL triggers.
+Synchronization of full-text tables with their content table happens by means of SQL triggers.
 
 SQLite automatically deletes those triggers when the content (not full-text) table is dropped.
 
-However, those triggers remain after the full-text table has been dropped. Unless they are dropped too, they will prevent future insertion, updates, and deletions in the content table, and the creation of a new full-text table.
+However, those triggers remain after the full-text table has been dropped. Unless they are dropped too, they will prevent future insertions, updates, and deletions in the content table, and the creation of a new full-text table.
 
 To drop those triggers, use the `dropFTS4SynchronizationTriggers` or `dropFTS5SynchronizationTriggers` methods:
 
@@ -683,7 +646,7 @@ try db.drop(table: "book_ft")
 try db.dropFTS4SynchronizationTriggers(forTable: "book_ft")
 ```
 
-> :warning: **Warning**: there was a bug in GRDB up to version 2.3.1 included, which created triggers with a wrong name. If it is possible that the full-text table was created by an old version of GRDB, then delete the synchronization triggers **twice**: once with the name of the deleted full-text table, and once with the name of the content table:
+> **Warning**: there was a bug in GRDB up to version 2.3.1 included, which created triggers with a wrong name. If it is possible that the full-text table was created by an old version of GRDB, then delete the synchronization triggers **twice**: once with the name of the deleted full-text table, and once with the name of the content table:
 >
 > ```swift
 > // Drop full-text table
@@ -698,7 +661,7 @@ try db.dropFTS4SynchronizationTriggers(forTable: "book_ft")
 
 When you need to perform a full-text search, and the external content table contains all the data you need, you can simply query the full-text table.
 
-But if you need to load columns from the regular table, and in the same time perform a full-text search, then you will need to query both tables at the same time.
+But if you need to load columns from the regular table, and also perform a full-text search, then you will need to query both tables at the same time.
 
 That is because SQLite will throw an error when you try to perform a full-text search on a regular table:
 
@@ -726,10 +689,7 @@ let books = Book.fetchAll(db, sql: sql, arguments: [pattern])
 
 **You can define [record](../README.md#records) types around the full-text virtual tables.**
 
-However these tables don't have any explicit primary key. Instead, they use the [implicit rowid primary key](../README.md#the-implicit-rowid-primary-key): a special hidden column named `rowid`.
-
-You will have to [expose this hidden column](../README.md#exposing-the-rowid-column) in order to fetch, delete, and update full-text records by primary key.
-
+The primary key of those tables is the hidden `rowid` column. If you need to fetch, delete, and update full-text records by primary key, you will have to expose this column to the record type. See [The Database Schema](https://swiftpackageindex.com/groue/GRDB.swift/documentation/grdb/databaseschema) for more information.
 
 ## Unicode Full-Text Gotchas
 

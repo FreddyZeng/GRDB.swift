@@ -1,9 +1,9 @@
 Why Adopt GRDB?
 ===============
 
-This document aims at exposing why GRDB could become your favorite database library.
+This document aims at explaining why GRDB could become your favorite database library.
 
-We'll start with a few [core principles](#core-principles), so that you see where this library aims at. Then we'll see how GRDB [solves problems](#solving-problems) that developers often face when they use database libraries such as FMDB, FCModel, SQLite.swift, Core Data, or Realm.
+We'll start with a few [core principles](#core-principles), so that you see what this library aims at. Then we'll see how GRDB [solves problems](#solving-problems) that developers often face when they use database libraries such as FMDB, FCModel, SQLite.swift, Core Data, or Realm.
 
 
 ## Core Principles
@@ -12,7 +12,7 @@ We'll start with a few [core principles](#core-principles), so that you see wher
 
 This is because a database row is not an easy type to deal with, and will never be, compared to a regular model. `player.name` looks and feels more natural than `playerRow["name"]`, doesn't it?
 
-The reputation of "active records" and ORMs has been tarnished by the recent focus on immutability, memory safety, and functional idioms that comes with languages like Swift and Rust. Features of 1st-generation records such as auto-updating, uniquing, lazy loading of relations, etc. are now considered ill-advised, if not plain harmful because of the multi-threading headaches they cause.
+The reputation of "active records" and ORMs has been tarnished by the recent focus on immutability, memory safety, and functional idioms that come with languages like Swift and Rust. Features of 1st-generation records such as auto-updating, uniquing, lazy loading of relations, etc. are now considered ill-advised, if not plain harmful because of the multi-threading headaches they cause.
 
 Yet recent ORMs such as Rust's [Diesel] have shown that it is possible to build record types that behave as plain and simple values. GRDB belongs to this family.
 
@@ -24,14 +24,14 @@ Complex database queries sometimes need to be prototyped and debugged in an SQL 
 
 ### The database file is the single source of truth.
 
-Each Core Data's managed object context has its own version of the database. This can be useful when developing a macOS application full of inspector panels and nested undo stacks. But that's about it.
+Each Core Data managed object context has its own version of the database. This can be useful when developing a macOS application full of inspector panels and nested undo stacks. But that's about it.
 
 In the same vein, each application thread has its own version of a Realm database, with non trivial synchronization points.
 
 Conversely, GRDB assumes that many apps want to use the database as a reliable and unambiguous storage.
 
 
-### Applications developers have specific needs.
+### Application developers have specific needs.
 
 GRDB puts all bets on SQLite, and focuses on front-end GUI applications.
 
@@ -39,9 +39,9 @@ This means that dealing with servers, MySQL, or PostgreSQL is out of scope. GRDB
 
 Focusing on SQLite and applications has allowed GRDB to build features usually only found in company-sponsored libraries: migrations, record comparison, database observation, multi-threading safety, table view animations, support for reactive streams...
 
-The bet of GRDB is that developers can take great profit from a library that provides efficient and community-tested solutions to existing problems. For example, one can not address the multithreading difficulties of Core Data or Realm without looking at database concurrency and records straight in the face.
+The bet of GRDB is that developers can greatly benefit from a library that provides efficient and community-tested solutions to existing problems. For example, one cannot address the multithreading difficulties of Core Data or Realm without looking at database concurrency and records straight in the face.
 
-Since you don't have to take my words for granted, we'll now see how GRDB actually solves common problems that developers face with other database libraries.
+Since you don't have to take my word for it, we'll now see how GRDB actually solves common problems that developers face with other database libraries.
 
 
 ## Solving Problems
@@ -88,14 +88,14 @@ try place.delete(db)
 
 For your convenience, those record protocols can be derived from the [Decodable and Encodable](https://developer.apple.com/documentation/foundation/archives_and_serialization/encoding_and_decoding_custom_types) protocols of the standard library. [Codable records] are even given free support for JSON columns and other niceties.
 
-Being a protocol-oriented library that welcomes immutable types, GRDB records are unlike records in other ORM libraries. Particularly, records do not auto-update, and records are not uniqued. We'll see below that the lack of those features can be replaced with **database change notifications**, with many advantages.
+Being a protocol-oriented library that welcomes immutable types, GRDB records are unlike records in other ORM libraries. In particular, records do not auto-update, and records are not uniqued. We'll see below that the lack of those features can be replaced with **database change notifications**, with many advantages.
 
-See [Good Practices for Designing Record Types](GoodPracticesForDesigningRecordTypes.md) for some practical advice.
+See [Recommended Practices for Designing Record Types](https://swiftpackageindex.com/groue/GRDB.swift/documentation/grdb/recordrecommendedpractices) for some practical advice.
 
 
 ### Allow database records to cross threads
 
-As soon as records are immutable values, they can safely be used from different threads. You no longer have to pass object ids or references between threads, as in Core Data or Realm:
+Since records are immutable values, they can safely be used from different threads. You no longer have to pass object ids or references between threads, as in Core Data or Realm:
 
 ```swift
 if let player = try Player.fetchOne(db, key: 1) {
@@ -115,7 +115,7 @@ let player = Player(name: "arthur", score: 1000)
 let players = try Player.fetchAll(db)
 ```
 
-**Fetched records behave just like an in-memory cache of the database content.** Your application is free to decide, on its own, how it should handle the lifetime of those cached values: by ignoring future database changes, or by observing database changes and react accordingly.
+**Fetched records behave just like an in-memory cache of the database content.** Your application is free to decide, on its own, how it should handle the lifetime of those cached values: by ignoring future database changes, or by observing database changes and reacting accordingly.
 
 In order to keep your views synchronized with the database content, you can use [ValueObservation]. It notifies fresh values after each database change, with convenient support for [Combine](Combine.md) and [RxSwift](https://github.com/RxSwiftCommunity/RxGRDB).
 
@@ -137,28 +137,28 @@ let cancellable = observation.publisher(in: dbQueue).sink(
     
 // RxGRDB
 let disposable = observation.rx.observe(in: dbQueue).subscribe(
-    onNext: { (players: [Player]) in print("Fresh playerss") },
+    onNext: { (players: [Player]) in print("Fresh players") },
     onError: { error in ... })
 ```
 
 No matter which observation technique you use, you have common guarantees:
 
-First, notifications only come from database changes safely saved on disk. This is part of the "database as the single source of truth" core principle. You won't get notifications from unsaved changes or changes that have an opportunity to be rollbacked.
+First, notifications only come from database changes safely saved on disk. This is part of the "database as the single source of truth" core principle. You won't get notifications from unsaved changes or changes that have an opportunity to be rolled back.
 
 Next, you choose the dispatch queue on which notifications happen (generally the main queue, by default, as in the examples above). GRDB makes sure notifications happen in the same order as database transactions.
 
 Finally, all changes are notified, no matter how they are performed: record methods, raw SQL statements, foreign key cascades, or SQL triggers. GRDB roots its notification system in the rock-solid SQLite itself, so that high-level requests and raw SQL queries are equally supported.
 
-See [Database Observation](../README.md#database-changes-observation) for further information.
+See [Database Observation](https://swiftpackageindex.com/groue/GRDB.swift/documentation/grdb/databaseobservation) for further information.
 
 
 ### Non-blocking database reads
 
-GRDB ships with two ways to access databases, [database queues](../README.md#database-queues) and [pools](../README.md#database-pools).
+GRDB ships with two ways to access databases, [database queues](https://swiftpackageindex.com/groue/GRDB.swift/documentation/grdb/databasequeue) and [pools](https://swiftpackageindex.com/groue/GRDB.swift/documentation/grdb/databasepool).
 
 Database queues look a lot like FMDB's [FMDatabaseQueue](https://github.com/ccgus/fmdb#using-fmdatabasequeue-and-thread-safety): they serialize database accesses in a serial dispatch queue. There is never more than one thread that is accessing the database. This means that a long running database transaction that happens in a background thread, such as the synchronization of your local database from a remote server, can block your UI. As long as the queue is busy, the main thread can't fetch the values it wants to display on screen.
 
-[Database pools](../README.md#database-pools) can lift these unwanted locks. With database pools, reads are generally non-blocking, unless the maximum number of concurrent reads has been reached (and this maximum number can be configured).
+[Database pools](https://swiftpackageindex.com/groue/GRDB.swift/documentation/grdb/databasepool) can lift these unwanted locks. With database pools, reads are generally non-blocking, unless the maximum number of concurrent reads has been reached (and this maximum number can be configured).
 
 
 ### Strong and clear multi-threading guarantees
@@ -184,13 +184,13 @@ The more threats are handled by the application, the more skilled and careful a 
 
 I had to omit [Realm] and [FCModel] from the list, because I don't know them well enough. Yet I'd bet that Realm shares some behaviors with Core Data, and FCModel shares some behaviors with FMDatabaseQueue.
 
-We can see that the threat of conflicts is *always* left to the application. Core Data provides conflict policies, but no one can pretend that they are easy to plan, use, or test. This is an argument for leaving the application 100% responsible for conflict handling, in hope that simple ones can be handled in a simple way.
+We can see that the threat of conflicts is *always* left to the application. Core Data provides conflict policies, but no one can claim that they are easy to plan, use, or test. This is an argument for leaving the application 100% responsible for conflict handling, in the hope that simple ones can be handled in a simple way.
 
 Finally, raw FMDatabase, SQLite.swift, and Core Data are the hardest tools, and you'd better be a very skilled developer in order to use them properly.
 
 For detailed information about GRDB concurrency, check the [Concurrency Guide].
 
-For practical advice on designing the database access layer of your application, see the [Good Practices for Designing Record Types](GoodPracticesForDesigningRecordTypes.md).
+For practical advice on designing the database access layer of your application, see the [Recommended Practices for Designing Record Types](https://swiftpackageindex.com/groue/GRDB.swift/documentation/grdb/recordrecommendedpractices).
 
 
 ### Never pay for using raw SQL
@@ -207,13 +207,13 @@ try player.updateChanges {
 
 // SELECT * FROM player ORDER BY score DESC LIMIT 10
 let bestPlayers: [Player] = try Player
-    .order(scoreColumn.desc)
+    .order(\.score.desc)
     .limit(10)
     .fetchAll(db)
 
 // SELECT MAX(score) FROM player
 let maximumScore: Int? = try Player
-    .select(max(scoreColumn))
+    .select { max($0.score) }
     .asRequestOf(Int.self)
     .fetchOne(db)
 
@@ -254,7 +254,7 @@ extension Player {
 let player = try Player.filter(name: "Arthur O'Brien").fetchOne(db)
 ```
 
-Custom SQL requests as the one above are welcome in database observation tools like the built-in [ValueObservation] and its [Combine](Combine.md) and [RxSwift](https://github.com/RxSwiftCommunity/RxGRDB) flavors:
+Custom SQL requests such as the one above are welcome in database observation tools like the built-in [ValueObservation] and its [Combine](Combine.md) and [RxSwift](https://github.com/RxSwiftCommunity/RxGRDB) flavors:
 
 ```swift
 let playerObservation = ValueObservation.tracking { db in
@@ -285,23 +285,22 @@ If this little tour of GRDB has convinced you, the real trip starts here: [GRDB]
 
 Happy GRDB! :gift:
 
-[Concurrency Guide]: Concurrency.md
+[Concurrency Guide]: https://swiftpackageindex.com/groue/GRDB.swift/documentation/grdb/concurrency
 [Core Data]: https://developer.apple.com/documentation/coredata
-[DatabasePool]: ../README.md#database-pools
+[DatabasePool]: https://swiftpackageindex.com/groue/GRDB.swift/documentation/grdb/databasepool
 [Diesel]: http://diesel.rs
 [FCModel]: https://github.com/marcoarment/FCModel
-[ValueObservation]: ../README.md#valueobservation
+[ValueObservation]: https://swiftpackageindex.com/groue/GRDB.swift/documentation/grdb/valueobservation
 [Fluent]: https://github.com/vapor/fluent
-[FMDB]: http://github.com/ccgus/fmdb
-[GRDB]: http://github.com/groue/GRDB.swift
+[FMDB]: https://github.com/ccgus/fmdb
+[GRDB]: https://github.com/groue/GRDB.swift
 [PersistableRecord]: ../README.md#records
 [Realm]: http://realm.io
 [FetchableRecord]: ../README.md#records
-[SQLite.swift]: http://github.com/stephencelis/SQLite.swift
+[SQLite.swift]: https://github.com/stephencelis/SQLite.swift
 [StORM]: https://www.perfect.org/docs/StORM.html
-[Swift-Kuery]: http://github.com/IBM-Swift/Swift-Kuery
+[Swift-Kuery]: https://github.com/IBM-Swift/Swift-Kuery
 [TableRecord]: ../README.md#records
-[TransactionObserver]: ../README.md#transactionobserver-protocol
 [query interface]: ../README.md#the-query-interface
 [associations]: AssociationsBasics.md
 [Codable records]: ../README.md#codable-records

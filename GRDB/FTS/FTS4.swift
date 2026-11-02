@@ -1,48 +1,47 @@
-/// FTS4 lets you define "fts4" virtual tables.
+/// The virtual table module for the FTS4 full-text engine.
 ///
-///     // CREATE VIRTUAL TABLE document USING fts4(content)
-///     try db.create(virtualTable: "document", using: FTS4()) { t in
-///         t.column("content")
-///     }
+/// To create FTS4 tables, use the ``Database`` method
+/// ``Database/create(virtualTable:options:using:_:)``:
 ///
-/// See <https://www.sqlite.org/fts3.html>
-public struct FTS4: VirtualTableModule {
-    
-    /// Creates a FTS4 module suitable for the Database
-    /// `create(virtualTable:using:)` method.
+/// ```swift
+/// // CREATE VIRTUAL TABLE document USING fts4(content)
+/// try db.create(virtualTable: "document", using: FTS4()) { t in
+///     t.column("content")
+/// }
+/// ```
+///
+/// Related SQLite documentation: <https://www.sqlite.org/fts3.html>
+///
+/// ## Topics
+///
+/// ### The FTS4 Module
+///
+/// - ``init()``
+/// - ``FTS4TableDefinition``
+/// - ``FTS4ColumnDefinition``
+public struct FTS4 {
+    /// Creates an FTS4 module.
     ///
-    ///     // CREATE VIRTUAL TABLE document USING fts4(content)
-    ///     try db.create(virtualTable: "document", using: FTS4()) { t in
-    ///         t.column("content")
-    ///     }
+    /// For example:
     ///
-    /// See <https://www.sqlite.org/fts3.html>
-    public init() {
-    }
-    
-    // MARK: - VirtualTableModule Adoption
-    
-    /// The virtual table module name
-    public let moduleName = "fts4"
-    
-    // TODO: remove when `makeTableDefinition()` is no longer a requirement
-    /// Reserved; part of the VirtualTableModule protocol.
+    /// ```swift
+    /// // CREATE VIRTUAL TABLE document USING fts4(content)
+    /// try db.create(virtualTable: "document", using: FTS4()) { t in
+    ///     t.column("content")
+    /// }
+    /// ```
     ///
-    /// See Database.create(virtualTable:using:)
-    public func makeTableDefinition() -> FTS4TableDefinition {
-        preconditionFailure()
-    }
+    /// See ``Database/create(virtualTable:options:using:_:)``
+    public init() { }
+}
+
+extension FTS4: VirtualTableModule {
+    public var moduleName: String { "fts4" }
     
-    /// Reserved; part of the VirtualTableModule protocol.
-    ///
-    /// See Database.create(virtualTable:using:)
     public func makeTableDefinition(configuration: VirtualTableConfiguration) -> FTS4TableDefinition {
         FTS4TableDefinition(configuration: configuration)
     }
     
-    /// Reserved; part of the VirtualTableModule protocol.
-    ///
-    /// See Database.create(virtualTable:using:)
     public func moduleArguments(for definition: FTS4TableDefinition, in db: Database) -> [String] {
         var arguments: [String] = []
         
@@ -70,7 +69,7 @@ public struct FTS4: VirtualTableModule {
         
         switch definition.contentMode {
         case .raw(let content):
-            if let content = content {
+            if let content {
                 arguments.append("content=\"\(content)\"")
             }
         case .synchronized(let contentTable):
@@ -96,15 +95,22 @@ public struct FTS4: VirtualTableModule {
         return arguments
     }
     
-    /// Reserved; part of the VirtualTableModule protocol.
-    ///
-    /// See Database.create(virtualTable:using:)
     public func database(_ db: Database, didCreate tableName: String, using definition: FTS4TableDefinition) throws {
         switch definition.contentMode {
         case .raw:
             break
         case .synchronized(let contentTable):
             // https://www.sqlite.org/fts3.html#_external_content_fts4_tables_
+            
+            if definition.configuration.temporary {
+                // SQLite can't rebuild the index of temporary tables:
+                //
+                // sqlite> CREATE TABLE t(id INTEGER PRIMARY KEY, a, b, c);
+                // sqlite> CREATE VIRTUAL TABLE temp.ft USING fts4(content="t", b, c);
+                // sqlite> INSERT INTO ft(ft) VALUES('rebuild');
+                // Runtime error: SQL logic error
+                fatalError("Temporary external content FTS4 tables are not supported.")
+            }
             
             let rowIDColumn = try db.primaryKey(contentTable).rowIDColumn ?? Column.rowID.name
             let ftsTable = tableName.quotedDatabaseIdentifier
@@ -149,16 +155,36 @@ public struct FTS4: VirtualTableModule {
     }
 }
 
-/// The FTS4TableDefinition class lets you define columns of a FTS4 virtual table.
+/// An `FTS4TableDefinition` lets you define the components of an FTS4
+/// virtual table.
 ///
-/// You don't create instances of this class. Instead, you use the Database
-/// `create(virtualTable:using:)` method:
+/// You don't create instances of this class. Instead, you use the `Database`
+/// ``Database/create(virtualTable:options:using:_:)`` method:
 ///
-///     try db.create(virtualTable: "document", using: FTS4()) { t in // t is FTS4TableDefinition
-///         t.column("content")
-///     }
+/// ```swift
+/// try db.create(virtualTable: "document", using: FTS4()) { t in // t is FTS4TableDefinition
+///     t.column("content")
+/// }
+/// ```
 ///
-/// See <https://www.sqlite.org/fts3.html>
+/// ## Topics
+///
+/// ### Define Columns
+///
+/// - ``column(_:)``
+///
+/// ### External Content Tables
+///
+/// - ``synchronize(withTable:)``
+///
+/// ### FTS4 Options
+///
+/// - ``compress``
+/// - ``content``
+/// - ``matchinfo``
+/// - ``prefixes``
+/// - ``tokenizer``
+/// - ``uncompress``
 public final class FTS4TableDefinition {
     enum ContentMode {
         case raw(content: String?)
@@ -169,25 +195,30 @@ public final class FTS4TableDefinition {
     fileprivate var columns: [FTS4ColumnDefinition] = []
     fileprivate var contentMode: ContentMode = .raw(content: nil)
     
-    /// The virtual table tokenizer
+    /// The virtual table tokenizer.
     ///
-    ///     try db.create(virtualTable: "document", using: FTS4()) { t in
-    ///         t.tokenizer = .porter
-    ///     }
+    /// For example:
     ///
-    /// See <https://www.sqlite.org/fts3.html#creating_and_destroying_fts_tables>
+    /// ```swift
+    /// // CREATE VIRTUAL TABLE document USING fts4(tokenize=porter)
+    /// try db.create(virtualTable: "document", using: FTS4()) { t in
+    ///     t.tokenizer = .porter
+    /// }
+    /// ```
+    ///
+    /// Related SQLite documentation: <https://www.sqlite.org/fts3.html#creating_and_destroying_fts_tables>
     public var tokenizer: FTS3TokenizerDescriptor?
     
-    /// The FTS4 `content` option
+    /// The FTS4 `content` option.
     ///
     /// When you want the full-text table to be synchronized with the
-    /// content of an external table, prefer the `synchronize(withTable:)`
-    /// method.
+    /// content of an external table, prefer the
+    /// ``synchronize(withTable:)`` method.
     ///
     /// Setting this property invalidates any synchronization previously
-    /// established with the `synchronize(withTable:)` method.
+    /// established with the ``synchronize(withTable:)`` method.
     ///
-    /// See <https://www.sqlite.org/fts3.html#the_content_option_>
+    /// Related SQLite documentation: <https://www.sqlite.org/fts3.html#the_content_option_>
     public var content: String? {
         get {
             switch contentMode {
@@ -202,30 +233,30 @@ public final class FTS4TableDefinition {
         }
     }
     
-    /// The FTS4 `compress` option
+    /// The FTS4 `compress` option.
     ///
-    /// See <https://www.sqlite.org/fts3.html#the_compress_and_uncompress_options>
+    /// Related SQLite documentation: <https://www.sqlite.org/fts3.html#the_compress_and_uncompress_options>
     public var compress: String?
     
-    /// The FTS4 `uncompress` option
+    /// The FTS4 `uncompress` option.
     ///
-    /// See <https://www.sqlite.org/fts3.html#the_compress_and_uncompress_options>
+    /// Related SQLite documentation: <https://www.sqlite.org/fts3.html#the_compress_and_uncompress_options>
     public var uncompress: String?
     
-    /// The FTS4 `matchinfo` option
+    /// The FTS4 `matchinfo` option.
     ///
-    /// See <https://www.sqlite.org/fts3.html#the_matchinfo_option>
+    /// Related SQLite documentation: <https://www.sqlite.org/fts3.html#the_matchinfo_option>
     public var matchinfo: String?
     
-    /// Support for the FTS5 `prefix` option
+    /// The FTS4 `prefix` option.
     ///
     ///     // CREATE VIRTUAL TABLE document USING FTS4(content, prefix='2 4');
-    ///     db.create(virtualTable: "document", using:FTS4()) { t in
+    ///     try db.create(virtualTable: "document", using:FTS4()) { t in
     ///         t.prefixes = [2, 4]
     ///         t.column("content")
     ///     }
     ///
-    /// See <https://www.sqlite.org/fts3.html#the_prefix_option>
+    /// Related SQLite documentation: <https://www.sqlite.org/fts3.html#the_prefix_option>
     public var prefixes: Set<Int>?
     
     init(configuration: VirtualTableConfiguration) {
@@ -234,11 +265,18 @@ public final class FTS4TableDefinition {
     
     /// Appends a table column.
     ///
-    ///     try db.create(virtualTable: "document", using: FTS4()) { t in
-    ///         t.column("content")
-    ///     }
+    /// For example:
+    ///
+    /// ```swift
+    /// // CREATE VIRTUAL TABLE document USING fts4(content)
+    /// try db.create(virtualTable: "document", using: FTS4()) { t in
+    ///     t.column("content")
+    /// }
+    /// ```
     ///
     /// - parameter name: the column name.
+    /// - returns: An ``FTS4ColumnDefinition`` that allows you to refine the
+    ///   column definition.
     @discardableResult
     public func column(_ name: String) -> FTS4ColumnDefinition {
         let column = FTS4ColumnDefinition(name: name)
@@ -253,22 +291,55 @@ public final class FTS4TableDefinition {
     /// content in the external table. SQL triggers make sure that the
     /// full-text table is kept up to date with the external table.
     ///
-    /// See <https://sqlite.org/fts5.html#external_content_tables>
+    /// SQLite automatically deletes those triggers when the content
+    /// (not full-text) table is dropped.
+    ///
+    /// However, those triggers remain after the full-text table has been
+    /// dropped. Unless they are dropped too, they will prevent future
+    /// insertion, updates, and deletions in the content table, and the creation
+    /// of a new full-text table.
+    ///
+    /// To drop those triggers, call the `Database`
+    /// ``Database/dropFTS4SynchronizationTriggers(forTable:)`` method:
+    ///
+    /// ```swift
+    /// // Create tables
+    /// try db.create(table: "book") { t in
+    ///     ...
+    /// }
+    /// try db.create(virtualTable: "book_ft", using: FTS4()) { t in
+    ///     t.synchronize(withTable: "book")
+    ///     ...
+    /// }
+    ///
+    /// // Drop full-text table
+    /// try db.drop(table: "book_ft")
+    /// try db.dropFTS4SynchronizationTriggers(forTable: "book_ft")
+    /// ```
+    ///
+    /// Related SQLite documentation: <https://www.sqlite.org/fts3.html#_external_content_fts4_tables_>
     public func synchronize(withTable tableName: String) {
         contentMode = .synchronized(contentTable: tableName)
     }
 }
 
-/// The FTS4ColumnDefinition class lets you refine a column of an FTS4
-/// virtual table.
+// Explicit non-conformance to Sendable: `FTS4TableDefinition` is a mutable
+// class and there is no known reason for making it thread-safe.
+@available(*, unavailable)
+extension FTS4TableDefinition: Sendable { }
+
+/// Describes a column in an ``FTS4`` virtual table.
 ///
-/// You get instances of this class when you create an FTS4 table:
+/// You get instances of `FTS4ColumnDefinition` when you create an ``FTS4``
+/// virtual table. For example:
 ///
-///     try db.create(virtualTable: "document", using: FTS4()) { t in
-///         t.column("content")      // FTS4ColumnDefinition
-///     }
+/// ```swift
+/// try db.create(virtualTable: "document", using: FTS4()) { t in
+///     t.column("content")      // FTS4ColumnDefinition
+/// }
+/// ```
 ///
-/// See <https://www.sqlite.org/fts3.html>
+/// Related SQLite documentation: <https://www.sqlite.org/fts3.html>
 public final class FTS4ColumnDefinition {
     fileprivate let name: String
     fileprivate var isIndexed: Bool
@@ -282,30 +353,38 @@ public final class FTS4ColumnDefinition {
     
     /// Excludes the column from the full-text index.
     ///
-    ///     try db.create(virtualTable: "document", using: FTS4()) { t in
-    ///         t.column("a")
-    ///         t.column("b").notIndexed()
-    ///     }
+    /// For example:
     ///
-    /// See <https://www.sqlite.org/fts3.html#the_notindexed_option>
+    /// ```swift
+    /// try db.create(virtualTable: "document", using: FTS4()) { t in
+    ///     t.column("a")
+    ///     t.column("b").notIndexed()
+    /// }
+    /// ```
     ///
-    /// - returns: Self so that you can further refine the column definition.
+    /// Related SQLite documentation: <https://www.sqlite.org/fts3.html#the_notindexed_option>
+    ///
+    /// - returns: `self` so that you can further refine the column definition.
     @discardableResult
     public func notIndexed() -> Self {
         self.isIndexed = false
         return self
     }
     
-    /// Uses the column as the Int32 language id hidden column.
+    /// Uses the column as the language id hidden column.
     ///
-    ///     try db.create(virtualTable: "document", using: FTS4()) { t in
-    ///         t.column("a")
-    ///         t.column("lid").asLanguageId()
-    ///     }
+    /// For example:
     ///
-    /// See <https://www.sqlite.org/fts3.html#the_languageid_option>
+    /// ```swift
+    /// try db.create(virtualTable: "document", using: FTS4()) { t in
+    ///     t.column("a")
+    ///     t.column("lid").asLanguageId()
+    /// }
+    /// ```
     ///
-    /// - returns: Self so that you can further refine the column definition.
+    /// Related SQLite documentation: <https://www.sqlite.org/fts3.html#the_languageid_option>
+    ///
+    /// - returns: `self` so that you can further refine the column definition.
     @discardableResult
     public func asLanguageId() -> Self {
         self.isLanguageId = true
@@ -313,8 +392,15 @@ public final class FTS4ColumnDefinition {
     }
 }
 
+// Explicit non-conformance to Sendable: `FTS4ColumnDefinition` is a mutable
+// class and there is no known reason for making it thread-safe.
+@available(*, unavailable)
+extension FTS4ColumnDefinition: Sendable { }
+
 extension Database {
-    /// Deletes the synchronization triggers for a synchronized FTS4 table
+    /// Deletes the synchronization triggers for a synchronized FTS4 table.
+    ///
+    /// See ``FTS4TableDefinition/synchronize(withTable:)``.
     public func dropFTS4SynchronizationTriggers(forTable tableName: String) throws {
         try execute(sql: """
             DROP TRIGGER IF EXISTS \("__\(tableName)_bu".quotedDatabaseIdentifier);

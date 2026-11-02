@@ -2,8 +2,9 @@ import Foundation
 
 private struct DatabaseValueEncodingContainer: SingleValueEncodingContainer {
     let encode: (DatabaseValue) -> Void
+    let jsonEncoder: JSONEncoder
     
-    var codingPath: [CodingKey] { [] }
+    var codingPath: [any CodingKey] { [] }
     
     /// Encodes a null value.
     ///
@@ -37,27 +38,32 @@ private struct DatabaseValueEncodingContainer: SingleValueEncodingContainer {
     /// - throws: `EncodingError.invalidValue` if the given value is invalid in the current context for this format.
     /// - precondition: May not be called after a previous `self.encode(_:)` call.
     mutating func encode<T>(_ value: T) throws where T: Encodable {
-        if let dbValueConvertible = value as? DatabaseValueConvertible {
+        if let dbValueConvertible = value as? any DatabaseValueConvertible {
             // Prefer DatabaseValueConvertible encoding over Decodable.
             // This allows us to encode Date as String, for example.
             encode(dbValueConvertible.databaseValue)
         } else {
-            try DatabaseValueEncoder(encode: encode).encode(value)
+            try DatabaseValueEncoder(jsonEncoder: jsonEncoder, encode: encode).encode(value)
         }
     }
 }
 
 private class DatabaseValueEncoder: Encoder {
     let encode: (DatabaseValue) -> Void
+    let jsonEncoder: JSONEncoder
     var requiresJSON = false
     
-    init(encode: @escaping (DatabaseValue) -> Void) {
+    init(
+        jsonEncoder: JSONEncoder,
+        encode: @escaping (DatabaseValue) -> Void
+    ) {
+        self.jsonEncoder = jsonEncoder
         self.encode = encode
     }
     
     /// The path of coding keys taken to get to this point in encoding.
     /// A `nil` value indicates an unkeyed container.
-    var codingPath: [CodingKey] { [] }
+    var codingPath: [any CodingKey] { [] }
     
     /// Any contextual information set by the user for encoding.
     var userInfo: [CodingUserInfoKey: Any] = [:]
@@ -104,7 +110,7 @@ private class DatabaseValueEncoder: Encoder {
     /// - precondition: May not be called after a value has been encoded through
     ///   a previous `self.singleValueContainer()` call.
     func singleValueContainer() -> SingleValueEncodingContainer {
-        DatabaseValueEncodingContainer(encode: encode)
+        DatabaseValueEncodingContainer(encode: encode, jsonEncoder: jsonEncoder)
     }
     
     func encode<T: Encodable>(_ value: T) throws {
@@ -115,15 +121,7 @@ private class DatabaseValueEncoder: Encoder {
                 throw JSONRequiredError()
             }
         } catch is JSONRequiredError {
-            let encoder = JSONEncoder()
-            encoder.dataEncodingStrategy = .base64
-            encoder.dateEncodingStrategy = .millisecondsSince1970
-            encoder.nonConformingFloatEncodingStrategy = .throw
-            if #available(watchOS 4.0, OSX 10.13, iOS 11.0, tvOS 11.0, *) {
-                // guarantee some stability in order to ease value comparison
-                encoder.outputFormatting = .sortedKeys
-            }
-            let jsonData = try encoder.encode(value)
+            let jsonData = try jsonEncoder.encode(value)
             
             // Store JSON String in the database for easier debugging and
             // database inspection. Thanks to SQLite weak typing, we won't
@@ -131,7 +129,7 @@ private class DatabaseValueEncoder: Encoder {
             // eventually perform JSON decoding.
             // TODO: possible optimization: avoid this conversion to string,
             // and store raw data bytes as an SQLite string
-            let jsonString = String(data: jsonData, encoding: .utf8)!
+            let jsonString = String(decoding: jsonData, as: UTF8.self)
             try jsonString.encode(to: self)
         }
     }
@@ -140,7 +138,11 @@ private class DatabaseValueEncoder: Encoder {
 extension DatabaseValueConvertible where Self: Encodable {
     public var databaseValue: DatabaseValue {
         var dbValue: DatabaseValue! = nil
-        try! DatabaseValueEncoder(encode: { dbValue = $0 }).encode(self)
+        try! DatabaseValueEncoder(
+            jsonEncoder: Self.databaseJSONEncoder(),
+            encode: { dbValue = $0 }
+        )
+        .encode(self)
         return dbValue
     }
 }

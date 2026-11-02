@@ -1,15 +1,16 @@
 #if canImport(CoreGraphics)
 import CoreGraphics
+#elseif !canImport(Darwin)
+import Foundation
+#endif
 
 /// CGFloat adopts DatabaseValueConvertible
 extension CGFloat: DatabaseValueConvertible {
-    
-    /// Returns a value that can be stored in the database.
+    /// Returns a REAL database value.
     public var databaseValue: DatabaseValue {
         Double(self).databaseValue
     }
     
-    /// Returns a CGFloat initialized from *dbValue*, if possible.
     public static func fromDatabaseValue(_ dbValue: DatabaseValue) -> CGFloat? {
         guard let double = Double.fromDatabaseValue(dbValue) else {
             return nil
@@ -17,4 +18,3 @@ extension CGFloat: DatabaseValueConvertible {
         return CGFloat(double)
     }
 }
-#endif

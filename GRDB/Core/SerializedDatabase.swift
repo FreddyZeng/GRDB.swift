@@ -1,9 +1,12 @@
 import Foundation
 
-/// A class that serializes accesses to a database.
+/// A class that serializes accesses to an SQLite connection.
 final class SerializedDatabase {
     /// The database connection
     private let db: Database
+    
+    /// The actor that performs asynchronous accesses
+    private let actor: DispatchQueueActor
     
     /// The database configuration
     var configuration: Configuration { db.configuration }
@@ -13,6 +16,9 @@ final class SerializedDatabase {
     
     /// The dispatch queue
     private let queue: DispatchQueue
+    
+    /// If true, overrides `configuration.allowsUnsafeTransactions`.
+    private var allowsUnsafeTransactions = false
     
     init(
         path: String,
@@ -52,6 +58,8 @@ final class SerializedDatabase {
         } else {
             self.queue = configuration.makeWriterDispatchQueue(label: identifier)
         }
+        self.actor = DispatchQueueActor(queue: queue)
+        
         SchedulingWatchdog.allowDatabase(db, onQueue: queue)
         try queue.sync {
             do {
@@ -76,10 +84,25 @@ final class SerializedDatabase {
         }
     }
     
-    /// Synchronously executes a block the serialized dispatch queue, and
-    /// returns its result.
+    /// Executes database operations, returns their result after they have
+    /// finished executing, and allows or forbids long-lived transactions.
     ///
-    /// This method is *not* reentrant.
+    /// This method is not reentrant.
+    ///
+    /// - parameter allowingLongLivedTransaction: When true, the
+    ///   ``Configuration/allowsUnsafeTransactions`` configuration flag is
+    ///   ignored until this method is called again with false.
+    func sync<T>(allowingLongLivedTransaction: Bool, _ body: (Database) throws -> T) rethrows -> T {
+        try sync { db in
+            self.allowsUnsafeTransactions = allowingLongLivedTransaction
+            return try body(db)
+        }
+    }
+    
+    /// Executes database operations, and returns their result after they
+    /// have finished executing.
+    ///
+    /// This method is not reentrant.
     func sync<T>(_ block: (Database) throws -> T) rethrows -> T {
         // Three different cases:
         //
@@ -115,15 +138,30 @@ final class SerializedDatabase {
         
         // Case 3
         return try queue.sync {
-            try SchedulingWatchdog.current!.inheritingAllowedDatabases(from: watchdog) {
+            try SchedulingWatchdog.inheritingAllowedDatabases(watchdog.allowedDatabases) {
                 defer { preconditionNoUnsafeTransactionLeft(db) }
                 return try block(db)
             }
         }
     }
     
-    /// Synchronously executes a block the serialized dispatch queue, and
-    /// returns its result.
+    /// Executes database operations, returns their result after they have
+    /// finished executing, and allows or forbids long-lived transactions.
+    ///
+    /// This method is reentrant.
+    ///
+    /// - parameter allowingLongLivedTransaction: When true, the
+    ///   ``Configuration/allowsUnsafeTransactions`` configuration flag is
+    ///   ignored until this method is called again with false.
+    func reentrantSync<T>(allowingLongLivedTransaction: Bool, _ body: (Database) throws -> T) rethrows -> T {
+        try reentrantSync { db in
+            self.allowsUnsafeTransactions = allowingLongLivedTransaction
+            return try body(db)
+        }
+    }
+    
+    /// Executes database operations, and returns their result after they
+    /// have finished executing.
     ///
     /// This method is reentrant.
     func reentrantSync<T>(_ block: (Database) throws -> T) rethrows -> T {
@@ -176,7 +214,7 @@ final class SerializedDatabase {
         
         // Case 3
         return try queue.sync {
-            try SchedulingWatchdog.current!.inheritingAllowedDatabases(from: watchdog) {
+            try SchedulingWatchdog.inheritingAllowedDatabases(watchdog.allowedDatabases) {
                 // Since we are reentrant, a transaction may already be opened.
                 // In this case, don't check for unsafe transaction at the end.
                 if db.isInsideTransaction {
@@ -189,15 +227,15 @@ final class SerializedDatabase {
         }
     }
     
-    /// Asynchronously executes a block in the serialized dispatch queue.
-    func async(_ block: @escaping (Database) -> Void) {
+    /// Schedules database operations for execution, and returns immediately.
+    func async(_ block: @escaping @Sendable (Database) -> Void) {
         queue.async {
             block(self.db)
             self.preconditionNoUnsafeTransactionLeft(self.db)
         }
     }
     
-    /// Returns true if any only if the current dispatch queue is valid.
+    /// Returns true if and only if the current dispatch queue is valid.
     var onValidQueue: Bool {
         SchedulingWatchdog.current?.allows(db) ?? false
     }
@@ -208,6 +246,27 @@ final class SerializedDatabase {
     func execute<T>(_ block: (Database) throws -> T) rethrows -> T {
         preconditionValidQueue()
         return try block(db)
+    }
+    
+    /// Asynchronously executes the block.
+    func execute<T: Sendable>(
+        _ block: @Sendable (Database) throws -> T
+    ) async throws -> T {
+        let cancelMutex = Mutex<(@Sendable () -> Void)?>(nil)
+        return try await withTaskCancellationHandler {
+            try await actor.execute {
+                defer {
+                    cancelMutex.store(nil)
+                    db.uncancel()
+                    preconditionNoUnsafeTransactionLeft(db)
+                }
+                cancelMutex.store(db.cancel)
+                try Task.checkCancellation()
+                return try block(db)
+            }
+        } onCancel: {
+            cancelMutex.withLock { $0?() }
+        }
     }
     
     func interrupt() {
@@ -234,24 +293,22 @@ final class SerializedDatabase {
         SchedulingWatchdog.preconditionValidQueue(db, message(), file: file, line: line)
     }
     
-    /// Fatal error if a transaction has been left opened.
+    /// Fatal error if a transaction has been left open.
     private func preconditionNoUnsafeTransactionLeft(
         _ db: Database,
-        _ message: @autoclosure() -> String = "A transaction has been left opened at the end of a database access",
+        _ message: @autoclosure() -> String = "A transaction has been left open at the end of a database access",
         file: StaticString = #file,
         line: UInt = #line)
     {
         GRDBPrecondition(
-            configuration.allowsUnsafeTransactions || !db.isInsideTransaction,
+            allowsUnsafeTransactions || configuration.allowsUnsafeTransactions || !db.isInsideTransaction,
             message(),
             file: file,
             line: line)
     }
 }
 
-#if swift(>=5.6) && canImport(_Concurrency)
 // @unchecked because the wrapped `Database` itself is not Sendable.
 // It happens the job of SerializedDatabase is precisely to provide thread-safe
 // access to `Database`.
 extension SerializedDatabase: @unchecked Sendable { }
-#endif

@@ -1,4 +1,3 @@
-/// :nodoc:
 public struct SQLInterpolation: StringInterpolationProtocol {
     var elements: [SQL.Element]
     
@@ -12,7 +11,7 @@ public struct SQLInterpolation: StringInterpolationProtocol {
         elements.append(.sql(sql))
     }
     
-    /// Appends a raw SQL snippet, with eventual arguments.
+    /// Appends a raw SQL snippet, with optional arguments.
     ///
     /// For example:
     ///

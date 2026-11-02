@@ -1,6 +1,18 @@
+// Import C SQLite functions
+#if GRDBCIPHER // CocoaPods (SQLCipher subspec)
+import SQLCipher
+#elseif GRDBFRAMEWORK // GRDB.xcodeproj or CocoaPods (standard subspec)
+import SQLite3
+#elseif GRDBCUSTOMSQLITE // GRDBCustom Framework
+#elseif SQLCipher
+import SQLCipher
+#else // Default SPM trait must be the default. It impossible to detect from Xcode.
+import GRDBSQLite
+#endif
+
 /// A key that is used to decode a value in a row
 @usableFromInline
-enum RowKey: Hashable, GRDBSendable {
+enum RowKey: Hashable, Sendable {
     /// A column name
     case columnName(String)
     
@@ -14,11 +26,23 @@ enum RowKey: Hashable, GRDBSendable {
     case prefetchKey(String)
 }
 
-/// A decoding error
-@usableFromInline
-enum RowDecodingError: Error {
+/// A decoding error thrown when decoding a database row.
+///
+/// For example:
+///
+/// ```swift
+/// let row = try Row.fetchOne(db, sql: "SELECT NULL AS name")!
+/// // RowDecodingError: could not decode String from database value NULL.
+/// let name = try row.decode(String.self, forColumn: "name")
+/// ```
+public struct RowDecodingError: Error {
+    enum Impl {
+        case keyNotFound(RowKey, Context)
+        case valueMismatch(Any.Type, Context)
+    }
+    
     @usableFromInline
-    struct Context: CustomDebugStringConvertible, GRDBSendable {
+    struct Context: CustomDebugStringConvertible, Sendable {
         /// A description of what went wrong, for debugging purposes.
         @usableFromInline
         let debugDescription: String
@@ -46,15 +70,17 @@ enum RowDecodingError: Error {
         }
     }
     
-    case keyNotFound(RowKey, Context)
-    case valueMismatch(Any.Type, Context)
-    
+    var impl: Impl
     var context: Context {
-        switch self {
+        switch impl {
         case .keyNotFound(_, let context),
              .valueMismatch(_, let context):
             return context
         }
+    }
+    
+    static func valueMismatch(_ type: Any.Type, _ context: Context) -> Self {
+        self.init(impl: .valueMismatch(type, context))
     }
     
     /// Convenience method that builds the
@@ -65,11 +91,10 @@ enum RowDecodingError: Error {
         databaseValue: DatabaseValue)
     -> Self
     {
-        valueMismatch(
-            type,
-            RowDecodingError.Context(decodingContext: context, debugDescription: """
-                could not decode \(type) from database value \(databaseValue)
-                """))
+        let context = RowDecodingError.Context(decodingContext: context, debugDescription: """
+            could not decode \(type) from database value \(databaseValue)
+            """)
+        return self.init(impl: .valueMismatch(type, context))
     }
     
     /// Convenience method that builds the
@@ -78,7 +103,7 @@ enum RowDecodingError: Error {
     static func valueMismatch(
         _ type: Any.Type,
         sqliteStatement: SQLiteStatement,
-        index: Int32,
+        index: CInt,
         context: RowDecodingContext)
     -> Self
     {
@@ -99,18 +124,22 @@ enum RowDecodingError: Error {
         valueMismatch(
             type,
             context: RowDecodingContext(statement: statement, index: index),
-            databaseValue: DatabaseValue(sqliteStatement: statement.sqliteStatement, index: Int32(index)))
+            databaseValue: DatabaseValue(sqliteStatement: statement.sqliteStatement, index: CInt(index)))
     }
     
     /// Convenience method that builds the `column not found: <column>`
     /// error message.
     @usableFromInline
     static func columnNotFound(_ columnName: String, context: RowDecodingContext) -> Self {
-        keyNotFound(
+        self.init(impl: .keyNotFound(
             .columnName(columnName),
             RowDecodingError.Context(decodingContext: context, debugDescription: """
                 column not found: \(String(reflecting: columnName))
-                """))
+                """)))
+    }
+    
+    static func keyNotFound(_ rowKey: RowKey, _ context: Context) -> Self {
+        self.init(impl: .keyNotFound(rowKey, context))
     }
 }
 
@@ -137,7 +166,7 @@ struct RowDecodingContext {
         } else if let sqliteStatement = row.sqliteStatement {
             self.key = key
             self.row = row.copy()
-            self.sql = String(cString: sqlite3_sql(sqliteStatement)).trimmingCharacters(in: .sqlStatementSeparators)
+            self.sql = String(cString: sqlite3_sql(sqliteStatement)).trimmedSQLStatement
             self.statementArguments = nil // Can't rebuild them
         } else {
             self.key = key
@@ -158,8 +187,7 @@ struct RowDecodingContext {
 }
 
 extension RowDecodingError: CustomStringConvertible {
-    @usableFromInline
-    var description: String {
+    public var description: String {
         let context = self.context
         let row = context.row
         var chunks: [String] = []

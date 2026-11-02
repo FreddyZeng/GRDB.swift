@@ -1,37 +1,63 @@
+// Import C SQLite functions
+#if GRDBCIPHER // CocoaPods (SQLCipher subspec)
+import SQLCipher
+#elseif GRDBFRAMEWORK // GRDB.xcodeproj or CocoaPods (standard subspec)
+import SQLite3
+#elseif GRDBCUSTOMSQLITE // GRDBCustom Framework
+#elseif SQLCipher
+import SQLCipher
+#else // Default SPM trait must be the default. It impossible to detect from Xcode.
+import GRDBSQLite
+#endif
+
+#if !canImport(Darwin)
+@preconcurrency
+#endif
 import Dispatch
 import Foundation
 
-/// Configuration for a DatabaseQueue or DatabasePool.
-public struct Configuration {
+public struct Configuration: Sendable {
     
     // MARK: - Misc options
     
-    /// If true (the default), support for foreign keys is enabled.
-    /// See <https://www.sqlite.org/foreignkeys.html> for more information.
+    /// A boolean value indicating whether foreign key support is enabled.
     ///
-    /// Default: true
+    /// The default is true.
+    ///
+    /// Related SQLite documentation: <https://www.sqlite.org/foreignkeys.html>.
     public var foreignKeysEnabled = true
     
-    /// If true, database modifications are disallowed.
+    /// A boolean value indicating whether an SQLite connection is read-only.
     ///
-    /// Default: false
+    /// The default is false.
+    ///
+    /// ```swift
+    /// var config = Configuration()
+    /// config.readonly = true
+    ///
+    /// let dbQueue = try DatabaseQueue( // or DatabasePool
+    ///     path: "/path/to/database.sqlite",
+    ///     configuration: config)
+    /// ```
     public var readonly = false
     
-    /// The configuration label.
+    /// A label that describes a database connection.
     ///
     /// You can query this label at runtime:
     ///
-    ///     var configuration = Configuration()
-    ///     configuration.label = "MyDatabase"
-    ///     let dbQueue = try DatabaseQueue(path: ..., configuration: configuration)
+    /// ```swift
+    /// var config = Configuration()
+    /// config.label = "MyDatabase"
+    /// let dbQueue = try DatabaseQueue(configuration: config)
     ///
-    ///     try dbQueue.read { db in
-    ///         print(db.configuration.label) // Prints "MyDatabase"
-    ///     }
+    /// try dbQueue.read { db in
+    ///     print(db.configuration.label) // Prints "MyDatabase"
+    /// }
+    /// ```
     ///
-    /// The configuration label is also used to name Database connections (the
-    /// `Database.description` property), and the various dispatch queues
-    /// created by GRDB, visible in debugging sessions and crash logs.
+    /// The configuration label is also used to name ``Database`` connections
+    /// (their ``Database/description`` property), and the various dispatch
+    /// queues created by GRDB, visible in debugging sessions and crash logs.
     ///
     /// Those connection names and dispatch queue labels are intended for
     /// debugging only. Their format may change between GRDB releases.
@@ -64,227 +90,395 @@ public struct Configuration {
     ///   with the number of snapshots.
     ///
     /// The default configuration label is nil.
-    public var label: String? = nil
+    public var label: String?
     
-    /// If false, SQLite from version 3.29.0 will not interpret a double-quoted
-    /// string as a string literal if it does not match any valid identifier.
+    /// A boolean value indicating whether SQLite 3.29+ interprets
+    /// double-quoted strings as string literals when they do not match any
+    /// valid identifier.
     ///
-    /// For example:
+    /// The default and recommended value is false:
     ///
-    ///     // Error: no such column: foo
-    ///     let name = try String.fetchOne(db, sql: """
-    ///         SELECT "foo" FROM "player"
-    ///         """)
+    /// ```swift
+    /// // Error: no such column: missingColumn
+    /// let name = try String.fetchOne(db, sql: """
+    ///     SELECT "missingColumn" FROM "player"
+    ///     """)
+    /// ```
     ///
-    /// When true, or before version 3.29.0, such strings are interpreted as
-    /// string literals, as in the example below. This is a well known SQLite
-    /// [misfeature](https://sqlite.org/quirks.html#dblquote).
+    /// When true, or before SQLite version 3.29.0, double-quoted strings that
+    /// do not match any valid identifier are interpreted as string literals,
+    /// as in the example below. This is an SQLite
+    /// [misfeature](https://sqlite.org/quirks.html#double_quoted_string_literals_are_accepted):
     ///
-    ///     // Success: "foo"
-    ///     let name = try String.fetchOne(db, sql: """
-    ///         SELECT "foo" FROM "player"
-    ///         """)
-    ///
-    /// - Recommended value: false
-    /// - Default value: false
+    /// ```swift
+    /// // MISFEATURE: This query succeeds with result "missingColumn"
+    /// let name = try String.fetchOne(db, sql: """
+    ///     SELECT "missingColumn" FROM "player"
+    ///     """)
+    /// ```
     public var acceptsDoubleQuotedStringLiterals = false
     
-    /// When true, the `Database.suspendNotification` and
-    /// `Database.resumeNotification` suspend and resume the database. Database
-    /// suspension helps avoiding the [`0xdead10cc`
-    /// exception](https://developer.apple.com/documentation/xcode/understanding-the-exception-types-in-a-crash-report).
+    /// A boolean value indicating whether the database connection listens to
+    /// the ``Database/suspendNotification`` and ``Database/resumeNotification``
+    /// notifications.
     ///
-    /// During suspension, all database accesses but reads in WAL mode may throw
-    /// a DatabaseError of code `SQLITE_INTERRUPT`, or `SQLITE_ABORT`. You can
-    /// check for those error codes with the
-    /// `DatabaseError.isInterruptionError` property.
+    /// - note: [**🔥 EXPERIMENTAL**](https://github.com/groue/GRDB.swift/blob/master/README.md#what-are-experimental-features)
     ///
-    /// [**Experimental**](http://github.com/groue/GRDB.swift#what-are-experimental-features)
+    /// Set this flag to true when you apply the technique described in
+    /// <doc:DatabaseSharing#How-to-limit-the-0xDEAD10CC-exception>. See
+    /// ``Database/suspendNotification`` for more information about
+    /// suspended databases.
     public var observesSuspensionNotifications = false
     
-    /// If false (the default), statement arguments are not visible in the
-    /// description of database errors and trace events, preventing sensitive
-    /// information from leaking in unexpected places.
+    /// A boolean value indicating whether statement arguments are visible in
+    /// the description of database errors and trace events.
     ///
-    /// For example:
+    /// The default and recommended value is false: statement arguments are not
+    /// visible in database errors and trace events, preventing sensitive
+    /// information from leaking in unexpected places. For example:
     ///
-    ///     // Error: sensitive information is not printed when an error occurs:
-    ///     do {
-    ///         let email = "..." // sensitive information
-    ///         let player = try Player.filter(Column("email") == email).fetchOne(db)
-    ///     } catch {
-    ///         print(error)
-    ///     }
+    /// ```swift
+    /// db.trace { event in
+    ///     // By default, sensitive information is NOT printed
+    ///     // when a statement is traced:
+    ///     print(event)
+    /// }
     ///
-    ///     // Trace: sensitive information is not printed when a statement is traced:
-    ///     db.trace { event in
-    ///         print(event)
-    ///     }
-    ///     let email = "..." // sensitive information
-    ///     let player = try Player.filter(Column("email") == email).fetchOne(db)
+    /// do {
+    ///     // The sensitive information to protect
+    ///     let email = "..."
+    ///     let player = try Player.filter { $0.email == email }.fetchOne(db)
+    /// } catch {
+    ///     // By default, sensitive information is NOT printed
+    ///     // when an error occurs:
+    ///     print(error)
+    /// }
+    /// ```
     ///
-    /// For debugging purpose, you can set this flag to true, and get more
+    /// For debugging purposes, you can set this flag to true, and get more
     /// precise database reports. It is your responsibility to prevent sensitive
     /// information from leaking in unexpected locations, so you should not set
     /// this flag in release builds (think about GDPR and other
     /// privacy-related rules):
     ///
-    ///     var config = Configuration()
-    ///     #if DEBUG
-    ///     // Protect sensitive information by enabling verbose debugging in DEBUG builds only
-    ///     config.publicStatementArguments = true
-    ///     #endif
+    /// ```swift
+    /// var config = Configuration()
+    /// #if DEBUG
+    /// // Enable verbose debugging in DEBUG builds only
+    /// config.publicStatementArguments = true
+    /// #endif
     ///
-    ///     // The descriptions of trace events and errors now contain the
-    ///     // sensitive information:
-    ///     db.trace { event in
-    ///         print(event)
-    ///     }
-    ///     do {
-    ///         let email = "..."
-    ///         let player = try Player.filter(Column("email") == email).fetchOne(db)
-    ///     } catch {
-    ///         print(error)
-    ///     }
+    /// db.trace { event in
+    ///     // Sensitive information is printed in DEBUG builds:
+    ///     print(event)
+    /// }
+    ///
+    /// do {
+    ///     // The sensitive information to protect
+    ///     let email = "..."
+    ///     let player = try Player.filter { $0.email == email }.fetchOne(db)
+    /// } catch {
+    ///     // Sensitive information is printed in DEBUG builds:
+    ///     print(error)
+    /// }
+    /// ```
     public var publicStatementArguments = false
+    
+    /// The clock that feeds ``Database/transactionDate``.
+    ///
+    /// - note: [**🔥 EXPERIMENTAL**](https://github.com/groue/GRDB.swift/blob/master/README.md#what-are-experimental-features)
+    ///
+    /// The default clock is ``DefaultTransactionClock`` (which returns the
+    /// start date of the current transaction).
+    ///
+    /// For example:
+    ///
+    /// ```swift
+    /// var config = Configuration()
+    /// config.transactionClock = .custom { db in /* return some Date */ }
+    /// ```
+    public var transactionClock: any TransactionClock = .default
     
     // MARK: - Managing SQLite Connections
     
-    private var setups: [(Database) throws -> Void] = []
+    private var setups: [@Sendable (Database) throws -> Void] = []
     
-    /// The function argument is run when an SQLite connection is opened,
-    /// before the connection is made available for database access methods.
+    /// Defines a function to run whenever an SQLite connection is opened.
+    ///
+    /// The preparation function is run before the connection is made available
+    /// for database access methods.
     ///
     /// This method can be called several times. The preparation functions are
     /// run in the same order.
     ///
     /// For example:
     ///
-    ///     var config = Configuration()
-    ///     config.prepareDatabase { db in
-    ///         try db.execute(sql: "PRAGMA kdf_iter = 10000")
-    ///     }
+    /// ```swift
+    /// var config = Configuration()
+    /// config.prepareDatabase { db in
+    ///     // Prints all SQL statements
+    ///     db.trace { print("SQL >", $0) }
+    /// }
+    /// ```
     ///
-    /// When you use a `DatabasePool`, preparation functions are called for
+    /// When you use a ``DatabasePool``, preparation functions are called for
     /// the writer connection and all reader connections. You can distinguish
     /// them by querying `db.configuration.readonly`:
     ///
-    ///     var config = Configuration()
-    ///     config.prepareDatabase { db in
-    ///         if db.configuration.readonly {
-    ///             // reader connection
-    ///         } else {
-    ///             // writer connection
-    ///         }
+    /// ```swift
+    /// var config = Configuration()
+    /// config.prepareDatabase { db in
+    ///     if db.configuration.readonly {
+    ///         // reader connection
+    ///     } else {
+    ///         // writer connection
     ///     }
+    /// }
+    /// ```
     ///
-    /// On newly created databases, `DatabasePool` the WAL mode is activated
-    /// after the preparation functions have run.
-    public mutating func prepareDatabase(_ setup: @escaping (Database) throws -> Void) {
+    /// On newly created database files, ``DatabasePool`` activates the WAL
+    /// mode after the preparation functions have run.
+    public mutating func prepareDatabase(_ setup: @escaping @Sendable (Database) throws -> Void) {
         setups.append(setup)
     }
     
     // MARK: - Transactions
     
-    /// The default kind of transaction.
+    /// A boolean value indicating whether it is valid to leave a transaction
+    /// open at the end of a database access method.
     ///
-    /// Default: deferred
-    public var defaultTransactionKind: Database.TransactionKind = .deferred
-    
-    /// If false, it is a programmer error to leave a transaction opened at the
-    /// end of a database access block.
+    /// The default value is false: not completing a transaction is a
+    /// programmer error:
     ///
-    /// For example:
+    /// ```swift
+    /// let dbQueue = try DatabaseQueue()
     ///
-    ///     let dbQueue = DatabaseQueue()
+    /// // fatal error: A transaction has been left open at the end of a database access
+    /// try dbQueue.inDatabase { db in
+    ///     try db.beginTransaction()
+    /// }
+    /// ```
     ///
-    ///     // fatal error: A transaction has been left opened at the end of a database access
-    ///     try dbQueue.inDatabase { db in
-    ///         try db.beginTransaction()
-    ///     }
+    /// When true, one can leave an open transaction at the end of a database
+    /// access method:
     ///
-    /// If true, one can leave opened transaction at the end of database access
-    /// blocks:
+    /// ```swift
+    /// var config = Configuration()
+    /// config.allowsUnsafeTransactions = true
+    /// let dbQueue = try DatabaseQueue(configuration: config)
     ///
-    ///     var config = Configuration()
-    ///     config.allowsUnsafeTransactions = true
-    ///     let dbQueue = DatabaseQueue(configuration: config)
+    /// try dbQueue.inDatabase { db in
+    ///     try db.beginTransaction()
+    /// }
     ///
-    ///     try dbQueue.inDatabase { db in
-    ///         try db.beginTransaction()
-    ///     }
+    /// try dbQueue.inDatabase { db in
+    ///     try db.commit()
+    /// }
+    /// ```
     ///
-    ///     try dbQueue.inDatabase { db in
-    ///         try db.commit()
-    ///     }
-    ///
-    /// This configuration flag has no effect on DatabasePool readers: those
-    /// never allow leaving a transaction opened at the end of a read access.
-    ///
-    /// Default: false
+    /// This configuration flag has no effect on ``DatabasePool`` reader
+    /// connections: those never allow leaving a transaction open at the end
+    /// of a read access.
     public var allowsUnsafeTransactions = false
+    
+    // MARK: - Journal Mode
+    
+    /// Defines how the journal mode is configured when the database
+    /// connection is opened.
+    ///
+    /// Related SQLite documentation: <https://www.sqlite.org/pragma.html#pragma_journal_mode>
+    public enum JournalModeConfiguration: Sendable {
+        /// The default setup has ``DatabaseQueue`` perform no specific
+        /// configuration of the journal mode, and ``DatabasePool`` 
+        /// configure the database for the WAL mode (just like the
+        /// ``wal`` case).
+        case `default`
+        
+        /// The journal mode is set to WAL (plus extra configurations that
+        /// make life easier with WAL databases).
+        case wal
+    }
+    
+    /// Defines how the journal mode is configured when the database
+    /// connection is opened.
+    ///
+    /// This configuration is ignored when ``readonly`` is true.
+    ///
+    /// The default value has ``DatabaseQueue`` perform no specific
+    /// configuration of the journal mode, and ``DatabasePool`` configure
+    /// the database for the WAL mode.
+    ///
+    /// Applications that need to open a WAL database with a
+    /// ``DatabaseQueue`` should set the `journalMode` to `wal`:
+    ///
+    /// ```swift
+    /// // Open a WAL database with DatabaseQueue
+    /// var config = Configuration()
+    /// config.journalMode = .wal
+    /// let dbQueue = try DatabaseQueue(path: "...", configuration: config)
+    /// ```
+    ///
+    /// Related SQLite documentation: <https://www.sqlite.org/pragma.html#pragma_journal_mode>
+    public var journalMode = JournalModeConfiguration.default
     
     // MARK: - Concurrency
     
-    /// The behavior in case of SQLITE_BUSY error. See <https://www.sqlite.org/rescode.html#busy>
+    /// Defines how `SQLITE_BUSY` errors are handled.
     ///
-    /// Default: immediateError
+    /// The default is ``Database/BusyMode/immediateError``.
+    ///
+    /// Related SQLite documentation: <https://www.sqlite.org/rescode.html#busy>
     public var busyMode: Database.BusyMode = .immediateError
     
     /// The behavior in case of SQLITE_BUSY error, for read-only connections.
     /// If nil, GRDB picks a default one.
-    var readonlyBusyMode: Database.BusyMode? = nil
+    var readonlyBusyMode: Database.BusyMode?
     
-    /// The maximum number of concurrent readers (applies to database
-    /// pools only).
+    /// The maximum number of concurrent reader connections.
     ///
-    /// Default: 5
+    /// This configuration has an effect on ``DatabasePool`` and
+    /// ``DatabaseSnapshotPool`` only. The default value is 5.
+    ///
+    /// You can query this value at runtime in order to get the actual capacity
+    /// for concurrent reads of any ``DatabaseReader``. In this context,
+    /// ``DatabaseQueue`` and ``DatabaseSnapshot`` have a capacity of 1,
+    /// because they can't perform two concurrent reads. For example:
+    ///
+    /// ```swift
+    /// var config = Configuration()
+    /// config.maximumReaderCount = 5
+    ///
+    /// let path = "/path/to/database.sqlite"
+    /// let dbQueue = try DatabaseQueue(path: path, configuration: config)
+    /// let dbPool = try DatabasePool(path: path, configuration: config)
+    /// let dbSnapshot = try dbPool.makeSnapshot()
+    ///
+    /// print(dbQueue.configuration.maximumReaderCount)    // 1
+    /// print(dbPool.configuration.maximumReaderCount)     // 5
+    /// print(dbSnapshot.configuration.maximumReaderCount) // 1
+    /// ```
     public var maximumReaderCount: Int = 5
     
-    /// The quality of service class for the work performed by the database.
+    /// The quality of service of database accesses.
     ///
-    /// The quality of service is ignored if you supply a target queue.
+    /// The quality of service is ignored if you supply a ``targetQueue``.
     ///
-    /// Default: .default
-    public var qos: DispatchQoS = .default
+    /// The default is `userInitiated`.
+    public var qos: DispatchQoS = .userInitiated
     
-    /// A target queue for database accesses.
+    /// The effective quality of service of read-only database accesses.
+    public var readQoS: DispatchQoS {
+        targetQueue?.qos ?? self.qos
+    }
+    
+    /// The effective quality of service of write database accesses.
+    public var writeQoS: DispatchQoS {
+        writeTargetQueue?.qos ?? targetQueue?.qos ?? self.qos
+    }
+    
+    /// The target dispatch queue for database accesses.
     ///
     /// Database connections which are not read-only will prefer
-    /// `writeTargetQueue` instead, if it is not nil.
+    /// ``writeTargetQueue`` instead, if it is not nil.
     ///
-    /// When you use a database pool, make sure this queue is concurrent. This
+    /// When you use ``DatabasePool``, make sure this queue is concurrent. This
     /// is because in a serial dispatch queue, no concurrent database access can
     /// happen, and you may experience deadlocks.
     ///
     /// If the queue is nil, all database accesses happen in unspecified
     /// dispatch queues whose quality of service is determined by the
-    /// `qos` property.
+    /// ``qos`` property.
     ///
-    /// Default: nil
-    public var targetQueue: DispatchQueue? = nil
+    /// The default is nil.
+    public var targetQueue: DispatchQueue?
     
-    /// The target queue for database connections which are not read-only.
+    /// The target dispatch queue for write database accesses.
     ///
-    /// If this queue is nil, writer connections are controlled by `targetQueue`.
+    /// If this queue is nil, writer connections are controlled
+    /// by ``targetQueue``.
     ///
-    /// Default: nil
-    public var writeTargetQueue: DispatchQueue? = nil
+    /// The default is nil.
+    public var writeTargetQueue: DispatchQueue?
+
+#if os(iOS)
+    /// A boolean value indicating whether the database connection releases
+    /// memory when entering the background or upon receiving a memory warning
+    /// in iOS.
+    ///
+    /// The default is true.
+    public var automaticMemoryManagement = true
+#endif
+    
+    /// A boolean value indicating whether read-only connections should be
+    /// kept open.
+    ///
+    /// This configuration flag applies to ``DatabasePool`` only. The
+    /// default value is false.
+    ///
+    /// When the flag is false, a `DatabasePool` closes read-only
+    /// connections when requested to dispose of non-essential memory with
+    /// ``DatabasePool/releaseMemory()``. When true, those connections are
+    /// kept open.
+    ///
+    /// Consider setting this flag to true when profiling your application
+    /// reveals that a lot of time is spent opening new SQLite connections.
+    public var persistentReadOnlyConnections = false
+    
+    // MARK: - Database Schema
+    
+    /// A custom schema source.
+    ///
+    /// The use case for a custom schema source is enabling GRDB features that
+    /// would not work with the built-in schema introspection that is provided
+    /// by SQLite. For example, a custom schema source can help record types
+    /// that read or write in a database view.
+    ///
+    /// The schema source is automatically disabled during database
+    /// migrations performed by ``DatabaseMigrator``: those access the raw
+    /// SQLite schema, unaltered. If a migration needs a schema source,
+    /// you may call ``Database/withSchemaSource(_:execute:)`` from within
+    /// the body of a migration.
+    public var schemaSource: (any DatabaseSchemaSource)?
     
     // MARK: - Factory Configuration
     
-    /// Creates a factory configuration
+    /// Creates a factory configuration.
     public init() { }
     
     // MARK: - Not Public
     
-    var threadingMode: Database.ThreadingMode = .`default`
-    var SQLiteConnectionDidOpen: (() -> Void)?
-    var SQLiteConnectionWillClose: ((SQLiteConnection) -> Void)?
-    var SQLiteConnectionDidClose: (() -> Void)?
-    var SQLiteOpenFlags: Int32 {
-        let readWriteFlags = readonly ? SQLITE_OPEN_READONLY : (SQLITE_OPEN_CREATE | SQLITE_OPEN_READWRITE)
-        return threadingMode.SQLiteOpenFlags | readWriteFlags
+    /// The SQLite [threading mode](https://www.sqlite.org/threadsafe.html).
+    ///
+    /// - Note: Only the multi-thread mode (`SQLITE_OPEN_NOMUTEX`) is currently
+    /// supported, since all <doc:DatabaseConnections> access SQLite connections
+    /// through a `SerializedDatabase`.
+    var threadingMode = Database.ThreadingMode.default
+    
+    private(set) var SQLiteConnectionDidOpen: (@Sendable () -> Void)?
+    private(set) var SQLiteConnectionWillClose: (@Sendable (SQLiteConnection) -> Void)?
+    private(set) var SQLiteConnectionDidClose: (@Sendable () -> Void)?
+    
+    // Workaround https://github.com/apple/swift/issues/72727
+    mutating func onConnectionDidOpen(_ callback: @escaping @Sendable () -> Void) {
+        SQLiteConnectionDidOpen = callback
+    }
+    
+    // Workaround https://github.com/apple/swift/issues/72727
+    mutating func onConnectionWillClose(_ callback: @escaping @Sendable (SQLiteConnection) -> Void) {
+        SQLiteConnectionWillClose = callback
+    }
+    
+    // Workaround https://github.com/apple/swift/issues/72727
+    mutating func onConnectionDidClose(_ callback: @escaping @Sendable () -> Void) {
+        SQLiteConnectionDidClose = callback
+    }
+    
+    var SQLiteOpenFlags: CInt {
+        var flags = readonly ? SQLITE_OPEN_READONLY : (SQLITE_OPEN_CREATE | SQLITE_OPEN_READWRITE)
+        if sqlite3_libversion_number() >= 3037000 {
+            flags |= 0x02000000 // SQLITE_OPEN_EXRESCODE
+        }
+        return threadingMode.SQLiteOpenFlags | flags
     }
     
     func setUp(_ db: Database) throws {
@@ -310,21 +504,8 @@ public struct Configuration {
     /// Creates a DispatchQueue which has the quality of service and target
     /// queue of read accesses.
     func makeReaderDispatchQueue(label: String) -> DispatchQueue {
-        if let targetQueue = targetQueue {
+        if let targetQueue {
             return DispatchQueue(label: label, target: targetQueue)
-        } else {
-            return DispatchQueue(label: label, qos: qos)
-        }
-    }
-    
-    /// Creates a DispatchQueue which has the quality of service of
-    /// read accesses.
-    ///
-    /// The returned queue has no target queue, and won't create deadlocks when
-    /// used synchronously from a database access.
-    func makeDispatchQueue(label: String) -> DispatchQueue {
-        if let targetQueue = targetQueue {
-            return DispatchQueue(label: label, qos: targetQueue.qos)
         } else {
             return DispatchQueue(label: label, qos: qos)
         }

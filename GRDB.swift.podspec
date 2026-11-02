@@ -1,6 +1,6 @@
 Pod::Spec.new do |s|
   s.name     = 'GRDB.swift'
-  s.version  = '5.24.0'
+  s.version  = '7.12.0'
   
   s.license  = { :type => 'MIT', :file => 'LICENSE' }
   s.summary  = 'A toolkit for SQLite databases, with a focus on application development.'
@@ -9,23 +9,26 @@ Pod::Spec.new do |s|
   s.source   = { :git => 'https://github.com/groue/GRDB.swift.git', :tag => "v#{s.version}" }
   s.module_name = 'GRDB'
   
-  s.swift_versions = ['5.3', '5.4', '5.5']
-  s.ios.deployment_target = '11.0'
-  s.osx.deployment_target = '10.10'
-  s.watchos.deployment_target = '2.0'
-  s.tvos.deployment_target = '9.0'
+  s.swift_versions = ['6.1']
+  s.ios.deployment_target = '13.0'
+  s.osx.deployment_target = '10.15'
+  s.watchos.deployment_target = '7.0'
+  s.tvos.deployment_target = '13.0'
   s.default_subspec  = 'standard'
   
   s.subspec 'standard' do |ss|
     ss.source_files = 'GRDB/**/*.swift', 'Support/grdb_config.h'
     ss.framework = 'Foundation'
     ss.library = 'sqlite3'
+    ss.xcconfig = {
+      'OTHER_SWIFT_FLAGS' => '$(inherited) -D SQLITE_ENABLE_FTS5 -D GRDBFRAMEWORK',
+    }
   end
   
   s.subspec 'SQLCipher' do |ss|
     ss.source_files = 'GRDB/**/*.swift', 'Support/SQLCipher_config.h'
     ss.framework = 'Foundation'
-    ss.dependency 'SQLCipher', '>= 3.4.0'
+    ss.dependency 'SQLCipher', '>= 3.4.2'
     ss.xcconfig = {
       'OTHER_SWIFT_FLAGS' => '$(inherited) -D SQLITE_HAS_CODEC -D GRDBCIPHER -D SQLITE_ENABLE_FTS5',
       'OTHER_CFLAGS' => '$(inherited) -DSQLITE_HAS_CODEC -DGRDBCIPHER -DSQLITE_ENABLE_FTS5',

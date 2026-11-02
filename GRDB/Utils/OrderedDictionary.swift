@@ -1,4 +1,4 @@
-/// A dictionary with guaranteed keys ordering.
+/// A dictionary with guaranteed key ordering.
 ///
 ///     var dict = OrderedDictionary<String, Int>()
 ///     dict.append(1, forKey: "foo")
@@ -61,7 +61,7 @@ struct OrderedDictionary<Key: Hashable, Value> {
     }
     
     /// Updates the value stored in the dictionary for the given key, or
-    /// appnds a new key-value pair if the key does not exist.
+    /// appends a new key-value pair if the key does not exist.
     ///
     /// Use this method instead of key-based subscripting when you need to know
     /// whether the new value supplants the value of an existing key. If the
@@ -114,12 +114,10 @@ struct OrderedDictionary<Key: Hashable, Value> {
         return OrderedDictionary(keys: keys, dictionary: dictionary)
     }
     
-    mutating func merge<S>(
-        _ other: S,
-        uniquingKeysWith combine: (Value, Value) throws -> Value)
-    rethrows
-    where S: Sequence, S.Element == (Key, Value)
-    {
+    mutating func merge(
+        _ other: some Sequence<(Key, Value)>,
+        uniquingKeysWith combine: (Value, Value) throws -> Value
+    ) rethrows {
         for (key, value) in other {
             if let current = self[key] {
                 self[key] = try combine(current, value)
@@ -129,12 +127,10 @@ struct OrderedDictionary<Key: Hashable, Value> {
         }
     }
     
-    mutating func merge<S>(
-        _ other: S,
-        uniquingKeysWith combine: (Value, Value) throws -> Value)
-    rethrows
-    where S: Sequence, S.Element == (key: Key, value: Value)
-    {
+    mutating func merge(
+        _ other: some Sequence<(key: Key, value: Value)>,
+        uniquingKeysWith combine: (Value, Value) throws -> Value
+    ) rethrows {
         for (key, value) in other {
             if let current = self[key] {
                 self[key] = try combine(current, value)
@@ -144,23 +140,19 @@ struct OrderedDictionary<Key: Hashable, Value> {
         }
     }
     
-    func merging<S>(
-        _ other: S,
-        uniquingKeysWith combine: (Value, Value) throws -> Value)
-    rethrows -> OrderedDictionary<Key, Value>
-    where S: Sequence, S.Element == (Key, Value)
-    {
+    func merging(
+        _ other: some Sequence<(Key, Value)>,
+        uniquingKeysWith combine: (Value, Value) throws -> Value
+    ) rethrows -> OrderedDictionary<Key, Value> {
         var result = self
         try result.merge(other, uniquingKeysWith: combine)
         return result
     }
     
-    func merging<S>(
-        _ other: S,
-        uniquingKeysWith combine: (Value, Value) throws -> Value)
-    rethrows -> OrderedDictionary<Key, Value>
-    where S: Sequence, S.Element == (key: Key, value: Value)
-    {
+    func merging(
+        _ other: some Sequence<(key: Key, value: Value)>,
+        uniquingKeysWith combine: (Value, Value) throws -> Value
+    ) rethrows -> OrderedDictionary<Key, Value> {
         var result = self
         try result.merge(other, uniquingKeysWith: combine)
         return result
@@ -193,6 +185,21 @@ extension OrderedDictionary: Equatable where Value: Equatable {
         (lhs.keys == rhs.keys) && (lhs.dictionary == rhs.dictionary)
     }
 }
+
+extension OrderedDictionary: CustomStringConvertible {
+    var description: String {
+        let chunks = map { (key, value) in
+            "\(String(reflecting: key)): \(String(reflecting: value))"
+        }
+        if chunks.isEmpty {
+            return "[:]"
+        } else {
+            return "[\(chunks.joined(separator: ", "))]"
+        }
+    }
+}
+
+extension OrderedDictionary: Sendable where Key: Sendable, Value: Sendable { }
 
 extension Dictionary {
     init(_ orderedDictionary: OrderedDictionary<Key, Value>) {

@@ -15,8 +15,6 @@ How you can Contribute
         - [xcpretty](https://github.com/xcpretty/xcpretty) (gem)
     - For contributing code:
         - [Swiftlint](https://github.com/realm/SwiftLint) (present in the `$PATH` or in `/opt/homebrew/bin/`)
-    - For generating documentation:
-        - [Jazzy](https://github.com/realm/jazzy) (gem)
 
 2. **Clone the `development` branch on your machine.**
 
@@ -30,7 +28,7 @@ How you can Contribute
         - `GRDB`: GRDB sources
         - `Tests`: GRDB tests
     - `GRDBCustom.xcodeproj`: the project which builds GRDB with a custom SQLite build.
-    - `GRDBProfiling.xcodeproj`: a project which helps profiling GRDB with Instruments. No code here is really precious.
+    - `GRDBProfiling.xcodeproj`: a project which helps profile GRDB with Instruments. No code here is really precious.
     - `GRDBDemoiOS.xcodeproj`, `GRDBCombineDemo.xcodeproj`, `GRDBAsyncDemo.xcodeproj`: the demo apps.
     
     To work with `GRDBCustom.xcodeproj`:
@@ -40,7 +38,7 @@ How you can Contribute
 
 5. **Run tests**
     
-    You can run tests from `GRDB.xcworkspace`, after selecting your target (GRDBOSX, GRDBiOS, GRDBtvOS, from `GRDB.xcodeproj` or `GRDBCustom.xcodeproj`).
+    You can run tests from `GRDB.xcworkspace`, after selecting your scheme (`GRDB` from `GRDB.xcodeproj` or `GRDBCustom` from `GRDBCustom.xcodeproj`).
     
     Before submitting a pull request, please run in the terminal:
     
@@ -63,19 +61,21 @@ How you can Contribute
     - Get familiar with the [Swift API Design Guidelines](https://www.swift.org/documentation/api-design-guidelines/).
     - Spaces, not tabs.
     - Whitespace-only lines are not trimmed.
-    - Documentation comments are hard-wrapped at column 80 (Xcode > Preferences > Text Editing > Display > [X] Page guide at column: 80).
+    - Documentation comments are hard-wrapped at column 76 (Xcode > Preferences > Text Editing > Display > [X] Page guide at column: 76).
     - No Swiftlint warning after a build.
 
 
 7. **Please provide documentation for your changes**
 
-    GRDB documentation is provided as reference (inline doc comments starting with `///`, see [Documentation Comment Syntax](https://github.com/apple/swift/blob/main/docs/DocumentationComments.md)), and guides ([README.md](README.md) and the [Documentation](Documentation) folder).
+    GRDB documentation is provided as a DocC reference, and guides ([README.md](README.md) and the [Documentation](Documentation) folder).
     
-    GRDB is "documentation-driven", which means that nothing ships until it is supported by documentation that makes sense. Documentation makes sense when someone who is not you is able to figure out what is the purpose of your contribution, how to use it, and what are its eventual caveats and corner cases. When the documentation is hard to write, or reveals too many caveats, it is the sign that the api needs to be fixed.
+    Please keep the reference and the guides up-to-date. To control the quality of your DocC reference documentation, close the workspace, open `Package.swift` in Xcode, and use Product > Build Documentation.
+    
+    GRDB is "documentation-driven", which means that nothing ships until it is supported by documentation that makes sense. Documentation makes sense when someone who is not you is able to figure out what the purpose of your contribution is, how to use it, and what its caveats and corner cases are. When the documentation is hard to write, or reveals too many caveats, it is a sign that the api needs to be fixed.
     
 8. **Open a pull request with your changes (targeting the `development` branch)!**
 
-9. **If you are granted a push access to the repository**, check [ReleaseProcess.md](Documentation/ReleaseProcess.md) in order to publish a new GRDB version.
+9. **If you are granted push access to the repository**, check [ReleaseProcess.md](Documentation/ReleaseProcess.md) in order to publish a new GRDB version.
 
 
 ## Answer issues and contribute to discussions
@@ -85,7 +85,7 @@ Answering [issues](https://github.com/groue/GRDB.swift/issues), participating in
 
 ## Financial support and sponsoring
 
-GRDB is free, and openly developed by its contributors, on their free time, according to their will, needs, and availability. It is not controlled by any company.
+GRDB is free, and openly developed by its contributors, in their free time, according to their will, needs, and availability. It is not controlled by any company.
 
 Support is free as well, as long as it happens publicly, and is available to everyone as well as internet search engines. This excludes the private channels of social networks, closed environments such as Slack, etc.
 

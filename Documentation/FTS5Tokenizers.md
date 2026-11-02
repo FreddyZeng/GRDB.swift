@@ -3,7 +3,7 @@ FTS5 Tokenizers
 
 **[FTS5](https://www.sqlite.org/fts5.html) is an extensible full-text search engine.**
 
-GRDB lets you define your own custom FST5 tokenizers, and extend SQLite built-in tokenizers. Possible use cases are:
+GRDB lets you define your own custom FTS5 tokenizers, and extend SQLite built-in tokenizers. Possible use cases are:
 
 - Have "fi" match the ligature "&#xfb01;" (U+FB01)
 - Have "first" match "1st"
@@ -29,13 +29,13 @@ GRDB lets you define your own custom FST5 tokenizers, and extend SQLite built-in
 
 **A Tokenizer splits text into tokens**. For example, a tokenizer can split "SQLite is a database engine" into the five tokens "SQLite", "is", "a", "database", and "engine".
 
-FTS5 use tokenizers to tokenize both indexed documents and search patterns. **A match between a document and a search pattern happens when both produce *identical* tokens.**
+FTS5 uses tokenizers to tokenize both indexed documents and search patterns. **A match between a document and a search pattern happens when both produce *identical* tokens.**
 
 All SQLite [built-in tokenizers](https://www.sqlite.org/fts5.html#tokenizers) tokenize both "SQLite" and "sqlite" into the common lowercase token "sqlite". This is why they are case-insensitive. Generally speaking, different tokenizers achieve different matching by applying different transformations to the input text.
 
 - The [ascii](https://www.sqlite.org/fts5.html#ascii_tokenizer) tokenizer turns all ASCII characters to lowercase. "SQLite is a database engine" gives "sqlite", "is", "a", "database", and "engine". The query "SQLITE DATABASE" will match, because its tokens "sqlite" and "database" are found in the document.
 
-- The [unicode61](https://www.sqlite.org/fts5.html#unicode61_tokenizer) tokenizer remove diacritics from latin characters. Unlike the ascii tokenizer, it will match "Jérôme" with "Jerome", as both produce the same "jerome" token.
+- The [unicode61](https://www.sqlite.org/fts5.html#unicode61_tokenizer) tokenizer removes diacritics from latin characters. Unlike the ascii tokenizer, it will match "Jérôme" with "Jerome", as both produce the same "jerome" token.
 
 - The [porter](https://www.sqlite.org/fts5.html#porter_tokenizer) tokenizer turns English words into their root: "database engine" gives the "databas" and "engin" tokens. The query "database engines" will match, because it produces the same tokens.
 
@@ -43,7 +43,7 @@ However, built-in tokenizers don't match "first" with "1st", because they produc
 
 Nor do they match "Grossmann" with "Großmann", because they produce the different "grossmann" and "großmann" tokens.
 
-Custom tokenizers help dealing with these situations. We'll see how to match "Grossmann" and "Großmann" by tokenizing them into "grossmann" (see [latin script](#example-latin-script)). We'll also see how to have "first" and "1st" emit *synonym tokens*, so that they can match too (see [synonyms](#example-synonyms)).
+Custom tokenizers help deal with these situations. We'll see how to match "Grossmann" and "Großmann" by tokenizing them into "grossmann" (see [latin script](#example-latin-script)). We'll also see how to have "first" and "1st" emit *synonym tokens*, so that they can match too (see [synonyms](#example-synonyms)).
 
 
 ## The Tokenizer Protocols
@@ -54,7 +54,7 @@ GRDB lets you use and define FTS5 tokenizers through three protocols:
     
     - [FTS5CustomTokenizer](#fts5customtokenizer): the low-level protocol that lets custom tokenizers use the raw [FTS5 C API](https://www.sqlite.org/fts5.html#custom_tokenizers).
     
-        - [FTS5WrapperTokenizer](#fts5wrappertokenizer): the high-level protocol for custom tokenizers that post-processes the tokens produced by another FTS5Tokenizer.
+        - [FTS5WrapperTokenizer](#fts5wrappertokenizer): the high-level protocol for custom tokenizers that post-process the tokens produced by another FTS5Tokenizer.
 
 
 ## Using a Custom Tokenizer
@@ -73,7 +73,7 @@ config.prepareDatabase { db in
 let dbQueue = try DatabaseQueue(path: dbPath, configuration: config)
 ```
 
-**Create [full-text tables](../../../#create-fts5-virtual-tables) that use the custom tokenizer:**
+**Create [full-text tables](FullTextSearch.md#create-fts5-virtual-tables) that use the custom tokenizer:**
 
 ```swift
 try db.create(virtualTable: "documents", using: FTS5()) { t in
@@ -82,7 +82,7 @@ try db.create(virtualTable: "documents", using: FTS5()) { t in
 }
 ```
 
-The full-text table can be fed and queried in [a regular way](../../../#full-text-search):
+The full-text table can be fed and queried in [a regular way](FullTextSearch.md):
 
 ```swift
 try db.execute(sql: "INSERT INTO documents VALUES (?)", arguments: ["..."])
@@ -95,7 +95,7 @@ let documents = try Document.matching(pattern).fetchAll(db)
 
 ## FTS5Tokenizer
 
-**FST5Tokenizer** is the protocol for all FTS5 tokenizers.
+**FTS5Tokenizer** is the protocol for all FTS5 tokenizers.
 
 It only requires a tokenization method that matches the low-level `xTokenize` C function documented at https://www.sqlite.org/fts5.html#custom_tokenizers. We'll discuss it more when describing custom tokenizers.
 
@@ -161,7 +161,7 @@ try db.create(virtualTable: "documents", using: FTS5()) { t in
 
 FTS5CustomTokenizer inherits from [FTS5Tokenizer](#fts5tokenizer), and performs tokenization with its `tokenize(context:tokenization:pText:nText:tokenCallback:)` method. This low-level method matches the `xTokenize` C function documented at https://www.sqlite.org/fts5.html#custom_tokenizers.
 
-This method arguments are:
+This method's arguments are:
 
 - `context`: An opaque pointer that is the first argument to the `tokenCallback` function
 - `tokenization`: The reason why FTS5 is requesting tokenization.
@@ -175,18 +175,18 @@ This method arguments are:
     - `iStart`: Byte offset of token within input text
     - `iEnd`: Byte offset of end of token within input text
 
-Since tokenization is hard, and pointers to byte buffers uneasy to deal with, you may enjoy the [FTS5WrapperTokenizer](#fts5wrappertokenizer) protocol.
+Since tokenization is hard, and pointers to byte buffers difficult to deal with, you may enjoy the [FTS5WrapperTokenizer](#fts5wrappertokenizer) protocol.
 
 
 ## FTS5WrapperTokenizer
 
 **FTS5WrapperTokenizer** is the high-level protocol for your custom tokenizers. It provides a default implementation for the low-level `tokenize(context:tokenization:pText:nText:tokenCallback:)` method, so that the adopting type does not have to deal with raw byte buffers of the raw [FTS5 C API](https://www.sqlite.org/fts5.html#custom_tokenizers).
 
-A FTS5WrapperTokenizer lets the hard tokenization job to another tokenizer, the "wrapped tokenizer", and post-processes the tokens produced by this wrapped tokenizer.
+An FTS5WrapperTokenizer leaves the hard tokenization job to another tokenizer, the "wrapped tokenizer", and post-processes the tokens produced by this wrapped tokenizer.
 
 ```swift
 protocol FTS5WrapperTokenizer : FTS5CustomTokenizer {
-    var wrappedTokenizer: FTS5Tokenizer { get }
+    var wrappedTokenizer: any FTS5Tokenizer { get }
     func accept(
         token: String,
         flags: FTS5TokenFlags,
@@ -195,7 +195,7 @@ protocol FTS5WrapperTokenizer : FTS5CustomTokenizer {
 }
 ```
 
-As all custom tokenizers, wrapper tokenizers must have a name:
+Like all custom tokenizers, wrapper tokenizers must have a name:
 
 ```swift
 final class MyTokenizer : FTS5WrapperTokenizer {
@@ -207,7 +207,7 @@ The `wrappedTokenizer` property is the mandatory wrapped tokenizer. You instanti
 
 ```swift
 final class MyTokenizer : FTS5WrapperTokenizer {
-    let wrappedTokenizer: FTS5Tokenizer
+    let wrappedTokenizer: any FTS5Tokenizer
     
     init(db: Database, arguments: [String]) throws {
         // Wrap the unicode61 tokenizer
@@ -236,11 +236,11 @@ final class MyTokenizer : FTS5WrapperTokenizer {
 
 The token argument is a token produced by the wrapped tokenizer, ready to be ignored, modified, or multiplied into several [synonyms](#example-synonyms).
 
-The tokenization parameter tells the reason why tokens are produced, if FTS5 is tokenizing a document, or a search pattern. Some tokenizers may produce different tokens depending on this parameter.
+The tokenization parameter tells the reason why tokens are produced: whether FTS5 is tokenizing a document, or a search pattern. Some tokenizers may produce different tokens depending on this parameter.
 
 Finally, the tokenCallback is a function you call to output a custom token.
 
-There are a two rules to observe when implementing the accept method:
+There are two rules to observe when implementing the accept method:
 
 1. Errors thrown by the tokenCallback function must not be caught (they notify that FTS5 requires the tokenization process to stop immediately).
 2. The flags parameter should be given unmodified to the tokenCallback function along with the custom token, unless you union it with the `.colocated` flag when the tokenizer produces [synonyms](#example-synonyms).
@@ -255,7 +255,7 @@ For example, your custom tokenizer can wrap [unicode61](https://www.sqlite.org/f
 ```swift
 final class MyTokenizer : FTS5WrapperTokenizer {
     static let name = "custom"
-    let wrappedTokenizer: FTS5Tokenizer
+    let wrappedTokenizer: any FTS5Tokenizer
     
     init(db: Database, arguments: [String]) throws {
         if arguments.isEmpty {
@@ -300,16 +300,16 @@ try db.create(virtualTable: "documents", using: FTS5()) { t in
 
 The topic of synonyms is documented at https://www.sqlite.org/fts5.html#synonym_support, which describes several methods. You should carefully read this documentation, and pick the method you prefer.
 
-In the example below, we'll pick method (3), and implement a tokenizer that adds multiple synonyms for a single term to the FTS index. Using this method, when tokenizing document text, the tokenizer provides multiple synonyms for each token. So that when a document such as "I won first place" is tokenized, entries are added to the FTS index for "i", "won", "first", "1st" and "place".
+In the example below, we'll pick method (3), and implement a tokenizer that adds multiple synonyms for a single term to the FTS index. Using this method, when tokenizing document text, the tokenizer provides multiple synonyms for each token. So when a document such as "I won first place" is tokenized, entries are added to the FTS index for "i", "won", "first", "1st" and "place".
 
-We'll also take care of the SQLite advice:
+We'll also follow the SQLite advice:
 
 > When using methods (2) or (3), it is important that the tokenizer only provide synonyms when tokenizing document text or query text, not both. Doing so will not cause any errors, but is inefficient.
 
 ```swift
 final class SynonymsTokenizer : FTS5WrapperTokenizer {
     static let name = "synonyms"
-    let wrappedTokenizer: FTS5Tokenizer
+    let wrappedTokenizer: any FTS5Tokenizer
     let synonyms: [Set<String>] = [["first", "1st"]]
     
     init(db: Database, arguments: [String]) throws {
@@ -350,18 +350,18 @@ Languages that use the [latin script](https://en.wikipedia.org/wiki/Latin_script
 
 Full-text search in such a corpus often needs input tolerance, so that "encyclopaedia" can match "Encyclopædia", "Grossmann", "Großmann", and "Jerome", "Jérôme".
 
-German has something specific in that both "Mueller" and "Muller" should match "Müller", when "Bauer" should not match "Baur" (only "ü" accepts both "u" and "ue"). A pull request that adds a chapter about German will be welcome.
+German has something specific in that both "Mueller" and "Muller" should match "Müller", while "Bauer" should not match "Baur" (only "ü" accepts both "u" and "ue"). A pull request that adds a chapter about German will be welcome.
 
 A custom FTS5 tokenizer lets you provide fuzzy latin matching: after "Grossmann", "Großmann", and "GROSSMANN" have all been turned into "grossmann", they will all match together.
 
-We'll wrap the built-in [unicode61](https://www.sqlite.org/fts5.html#unicode61_tokenizer) tokenizer (the one that knows how to split text on spaces and punctuations), and transform its tokens into their bare lowercase ascii form.
+We'll wrap the built-in [unicode61](https://www.sqlite.org/fts5.html#unicode61_tokenizer) tokenizer (the one that knows how to split text on spaces and punctuation), and transform its tokens into their bare lowercase ascii form.
 
 The tokenizer wrapping is provided by the [FTS5WrapperTokenizer](#fts5wrappertokenizer) protocol. The string transformation is provided by the [String.applyingTransform](https://developer.apple.com/reference/swift/string/1643133-applyingtransform) method:
 
 ```swift
 final class LatinAsciiTokenizer : FTS5WrapperTokenizer {
     static let name = "latinascii"
-    let wrappedTokenizer: FTS5Tokenizer
+    let wrappedTokenizer: any FTS5Tokenizer
     
     init(db: Database, arguments: [String]) throws {
         wrappedTokenizer = try db.makeTokenizer(.unicode61())
@@ -374,8 +374,6 @@ final class LatinAsciiTokenizer : FTS5WrapperTokenizer {
     }
 }
 ```
-
-> :point_up: **Note**: String.applyingTransform is not available before macOS 10.11. Use the Core Foundation function [CFStringTransform](https://developer.apple.com/reference/corefoundation/1542411-cfstringtransform) instead.
 
 Remember to register LatinAsciiTokenizer before using it:
 

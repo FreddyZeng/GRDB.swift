@@ -113,7 +113,7 @@ let cancellable = publisher.sink(
 
 # Asynchronous Database Access
 
-GRDB provide publishers that perform asynchronous database accesses:
+GRDB provides publishers that perform asynchronous database accesses:
 
 - [`readPublisher(receiveOn:value:)`]
 - [`writePublisher(receiveOn:updates:)`]
@@ -123,7 +123,7 @@ GRDB provide publishers that perform asynchronous database accesses:
 
 #### `DatabaseReader.readPublisher(receiveOn:value:)`
 
-This methods returns a publisher that completes after database values have been asynchronously fetched.
+This method returns a publisher that completes after database values have been asynchronously fetched.
 
 ```swift
 // DatabasePublishers.Read<[Player]>
@@ -134,7 +134,7 @@ let players = dbQueue.readPublisher { db in
 
 Any attempt at modifying the database completes subscriptions with an error.
 
-When you use a [database queue] or a [database snapshot], the read has to wait for any eventual concurrent database access performed by this queue or snapshot to complete.
+When you use a [database queue] or a [database snapshot], the read has to wait for any concurrent database access performed by this queue or snapshot to complete.
 
 When you use a [database pool], reads are generally non-blocking, unless the maximum number of concurrent reads has been reached. In this case, a read has to wait for another read to complete. That maximum number can be [configured].
 
@@ -174,9 +174,8 @@ This method returns a publisher that completes after database updates have been 
 ```swift
 // DatabasePublishers.Write<Int>
 let newPlayerCount = dbQueue.writePublisher(
-    updates: { db in try Player(...).insert(db) }
+    updates: { db in try Player(...).insert(db) },
     thenRead: { db, _ in try Player.fetchCount(db) })
-}
 ```
 
 It publishes exactly the same values as [`writePublisher(receiveOn:updates:)`]:
@@ -189,9 +188,9 @@ let newPlayerCount = dbQueue.writePublisher { db -> Int in
 }
 ```
 
-The difference is that the last fetches are performed in the `thenRead` function. This function accepts two arguments: a readonly database connection, and the result of the `updates` function. This allows you to pass information from a function to the other (it is ignored in the sample code above).
+The difference is that the last fetches are performed in the `thenRead` function. This function accepts two arguments: a readonly database connection, and the result of the `updates` function. This allows you to pass information from one function to the other (it is ignored in the sample code above).
 
-When you use a [database pool], this method applies a scheduling optimization: the `thenRead` function sees the database in the state left by the `updates` function, and yet does not block any concurrent writes. This can reduce database write contention. See [Advanced DatabasePool](Concurrency.md#advanced-databasepool) for more information.
+When you use a [database pool], this method applies a scheduling optimization: the `thenRead` function sees the database in the state left by the `updates` function, and yet does not block any concurrent writes. This can reduce database write contention.
 
 When you use a [database queue], the results are guaranteed to be identical, but no scheduling optimization is applied.
 
@@ -224,13 +223,13 @@ let publisher = observation.publisher(in: dbQueue)
 
 This publisher has the same behavior as ValueObservation:
 
-- It notifies an initial value before the eventual changes.
+- It notifies an initial value before subsequent changes.
 - It may coalesce subsequent changes into a single notification.
-- It may notify consecutive identical values. You can filter out the undesired duplicates with the `removeDuplicates()` Combine operator, but we suggest you have a look at the [removeDuplicates()](../README.md#valueobservationremoveduplicates) GRDB operator also.
+- It may notify consecutive identical values. You can filter out the undesired duplicates with the `removeDuplicates()` Combine operator, but we suggest you have a look at the [removeDuplicates()](https://swiftpackageindex.com/groue/GRDB.swift/documentation/grdb/valueobservation/removeduplicates()) GRDB operator also.
 - It only completes when it is cancelled.
-- By default, it notifies the initial value, as well as eventual changes and errors, on the main thread, asynchronously.
+- By default, it notifies the initial value, as well as subsequent changes and errors, on the main thread, asynchronously.
     
-    This can be configured with the `scheduling` argument. It does not accept a Combine scheduler, but a [ValueObservation scheduler](../README.md#valueobservation-scheduling).
+    This can be configured with the `scheduling` argument. It does not accept a Combine scheduler, but a [ValueObservationScheduler](https://swiftpackageindex.com/groue/GRDB.swift/documentation/grdb/valueobservationscheduler).
     
     For example, the `.immediate` scheduler makes sure the initial value is notified immediately when the publisher is subscribed. It can help your application update the user interface without having to wait for any asynchronous notifications:
     
@@ -247,8 +246,6 @@ This publisher has the same behavior as ValueObservation:
     ```
     
     Note that the `.immediate` scheduler requires that the publisher is subscribed from the main thread. It raises a fatal error otherwise.
-
-See [ValueObservation Scheduling](../README.md#valueobservation-scheduling) for more information.
 
 
 #### `SharedValueObservation.publisher()`
@@ -313,7 +310,7 @@ When you compose database publishers together with Combine operators such as `co
 
 This is because each database publisher is isolated from others: each one of them sees its own state of the database. Whenever some database change is interleaved between publisher operations, publishers will process or publish values that may not fit well together.
 
-In other words, whenever you need to perform some database access or observation that depends on some database invariant, make sure you define one and only one database publisher instead of combining several publishers. This is how you will prevent eventual concurrent database writes from messing with your app, and introduce bugs.
+In other words, whenever you need to perform some database access or observation that depends on some database invariant, make sure you define one and only one database publisher instead of combining several publishers. This is how you will prevent concurrent database writes from messing with your app, and introducing bugs.
 
 To this end, remember that *all database publishers can perform several requests*.
 
@@ -334,7 +331,7 @@ let hallOfFamePublisher = ValueObservation
         
         // 2nd request
         let bestPlayers = try Player
-            .order(Column("score").desc)
+            .order(\.score.desc)
             .limit(10)
             .fetchAll(db)
         
@@ -360,7 +357,7 @@ let totalPlayerCountPublisher = ValueObservation
 // OK
 let bestPlayerPublisher = ValueObservation
     .tracking(Player
-              .order(Column("score").desc)
+              .order(\.score.desc)
               .limit(10)
               .fetchAll)
     .publisher(in: dbQueue)
@@ -384,23 +381,23 @@ let cancellable = hallOfFamePublisher.sink(
 [Usage]: #usage
 [Asynchronous Database Access]: #asynchronous-database-access
 [Combine]: https://developer.apple.com/documentation/combine
-[Database Changes Observation]: ../README.md#database-changes-observation
+[Database Changes Observation]: https://swiftpackageindex.com/groue/GRDB.swift/documentation/grdb/databaseobservation
 [Database Observation]: #database-observation
 [Combine and Data Consistency]: #combine-and-data-consistency
-[DatabaseRegionObservation]: ../README.md#databaseregionobservation
+[DatabaseRegionObservation]: https://swiftpackageindex.com/groue/GRDB.swift/documentation/grdb/databaseregionobservation
 [Demo Application]: DemoApps/GRDBCombineDemo/README.md
 [SQLite]: http://sqlite.org
-[ValueObservation]: ../README.md#valueobservation
-[SharedValueObservation]: ../README.md#valueobservation-sharing
+[ValueObservation]: https://swiftpackageindex.com/groue/GRDB.swift/documentation/grdb/valueobservation
+[SharedValueObservation]: https://swiftpackageindex.com/groue/GRDB.swift/documentation/grdb/sharedvalueobservation
 [`DatabaseRegionObservation.publisher(in:)`]: #databaseregionobservationpublisherin
 [`ValueObservation.publisher(in:scheduling:)`]: #valueobservationpublisherinscheduling
 [`SharedValueObservation.publisher()`]: #sharedvalueobservationpublisher
 [`readPublisher(receiveOn:value:)`]: #databasereaderreadpublisherreceiveonvalue
 [`writePublisher(receiveOn:updates:)`]: #databasewriterwritepublisherreceiveonupdates
 [`writePublisher(receiveOn:updates:thenRead:)`]: #databasewriterwritepublisherreceiveonupdatesthenread
-[`migratePublisher(_:receiveOn:)`]: Migrations.md#asynchronous-migrations
+[`migratePublisher(_:receiveOn:)`]: https://swiftpackageindex.com/groue/GRDB.swift/documentation/grdb/databasemigrator/migratepublisher(_:receiveon:)
 [configured]: ../README.md#databasepool-configuration
-[database pool]: ../README.md#database-pools
-[database queue]: ../README.md#database-queues
-[database snapshot]: Concurrency.md#database-snapshots
+[database pool]: https://swiftpackageindex.com/groue/GRDB.swift/documentation/grdb/databasepool
+[database queue]: https://swiftpackageindex.com/groue/GRDB.swift/documentation/grdb/databasequeue
+[database snapshot]: https://swiftpackageindex.com/groue/GRDB.swift/documentation/grdb/databasesnapshot
 [scheduler]: https://developer.apple.com/documentation/combine/scheduler

@@ -1,17 +1,29 @@
+// Import C SQLite functions
+#if GRDBCIPHER // CocoaPods (SQLCipher subspec)
+import SQLCipher
+#elseif GRDBFRAMEWORK // GRDB.xcodeproj or CocoaPods (standard subspec)
+import SQLite3
+#elseif GRDBCUSTOMSQLITE // GRDBCustom Framework
+#elseif SQLCipher
+import SQLCipher
+#else // Default SPM trait must be the default. It impossible to detect from Xcode.
+import GRDBSQLite
+#endif
+
 import Foundation
 import XCTest
 @testable import GRDB
 
 // Support for Database.logError
-var lastResultCode: ResultCode? = nil
-var lastMessage: String? = nil
+struct SQLiteDiagnostic {
+    var resultCode: ResultCode
+    var message: String
+}
+private let lastSQLiteDiagnosticMutex = Mutex<SQLiteDiagnostic?>(nil)
+var lastSQLiteDiagnostic: SQLiteDiagnostic? { lastSQLiteDiagnosticMutex.load() }
 let logErrorSetup: Void = {
-    let lock = NSLock()
     Database.logError = { (resultCode, message) in
-        lock.lock()
-        defer { lock.unlock() }
-        lastResultCode = resultCode
-        lastMessage = message
+        lastSQLiteDiagnosticMutex.store(SQLiteDiagnostic(resultCode: resultCode, message: message))
     }
 }()
 
@@ -49,17 +61,22 @@ class GRDBTestCase: XCTestCase {
     
     // Subclasses can override
     // Default implementation is empty.
-    func setup(_ dbWriter: DatabaseWriter) throws {
+    func setup(_ dbWriter: some DatabaseWriter) throws {
     }
     
     // The default path for database pool directory
     private var dbDirectoryPath: String!
     
-    // Populated by default configuration
-    @LockedBox var sqlQueries: [String] = []
+    let _sqlQueriesMutex: Mutex<[String]> = Mutex([])
     
-    // Populated by default configuration
-    var lastSQLQuery: String? { sqlQueries.last }
+    // Automatically updated by default dbConfiguration
+    var sqlQueries: [String] { _sqlQueriesMutex.load() }
+    
+    // Automatically updated by default dbConfiguration
+    var lastSQLQuery: String? {
+        // Skip comments that may be inserted by triggers and virtual tables.
+        sqlQueries.last { !$0.hasPrefix("--") }
+    }
     
     override func setUp() {
         super.setUp()
@@ -73,7 +90,7 @@ class GRDBTestCase: XCTestCase {
         dbConfiguration = Configuration()
         
         // Test that database are deallocated in a clean state
-        dbConfiguration.SQLiteConnectionWillClose = { sqliteConnection in
+        dbConfiguration.onConnectionWillClose { sqliteConnection in
             // https://www.sqlite.org/capi3ref.html#sqlite3_close:
             // > If sqlite3_close_v2() is called on a database connection that still
             // > has outstanding prepared statements, BLOB handles, and/or
@@ -103,9 +120,11 @@ class GRDBTestCase: XCTestCase {
             }
         }
         
-        dbConfiguration.prepareDatabase { db in
+        dbConfiguration.prepareDatabase { [_sqlQueriesMutex] db in
             db.trace { event in
-                self.sqlQueries.append(event.expandedDescription)
+                _sqlQueriesMutex.withLock {
+                    $0.append(event.expandedDescription)
+                }
             }
             
             #if GRDBCIPHER_USE_ENCRYPTION
@@ -113,7 +132,7 @@ class GRDBTestCase: XCTestCase {
             #endif
         }
         
-        sqlQueries = []
+        clearSQLQueries()
     }
     
     override func tearDown() {
@@ -121,7 +140,11 @@ class GRDBTestCase: XCTestCase {
         do { try FileManager.default.removeItem(atPath: dbDirectoryPath) } catch { }
     }
     
-    private func _assertNoError(file: StaticString, line: UInt, _ test: () throws -> Void) {
+    func clearSQLQueries() {
+        _sqlQueriesMutex.store([])
+    }
+    
+    func assertNoError(file: StaticString = #file, line: UInt = #line, _ test: () throws -> Void) {
         do {
             try test()
         } catch {
@@ -129,100 +152,80 @@ class GRDBTestCase: XCTestCase {
         }
     }
     
-    private func _assertDidExecute(sql: String, file: StaticString, line: UInt) {
+    func assertDidExecute(sql: String, file: StaticString = #file, line: UInt = #line) {
         XCTAssertTrue(sqlQueries.contains(sql), "Did not execute \(sql)", file: file, line: line)
     }
     
-    private func _assert(_ record: EncodableRecord, isEncodedIn row: Row, file: StaticString, line: UInt) {
-        let recordDict = record.databaseDictionary
+    func assert(_ record: some EncodableRecord, isEncodedIn row: Row, file: StaticString = #file, line: UInt = #line) throws {
+        let recordDict = try record.databaseDictionary
         let rowDict = Dictionary(row, uniquingKeysWith: { (left, _) in left })
         XCTAssertEqual(recordDict, rowDict, file: file, line: line)
     }
     
     // Compare SQL strings (ignoring leading and trailing white space and semicolons.
-    private func _assertEqualSQL(_ lhs: String, _ rhs: String, file: StaticString, line: UInt) {
+    func assertEqualSQL(_ lhs: String, _ rhs: String, file: StaticString = #file, line: UInt = #line) {
         // Trim white space and ";"
         let cs = CharacterSet.whitespacesAndNewlines.union(CharacterSet(charactersIn: ";"))
         XCTAssertEqual(lhs.trimmingCharacters(in: cs), rhs.trimmingCharacters(in: cs), file: file, line: line)
     }
     
     // Compare SQL strings (ignoring leading and trailing white space and semicolons.
-    private func _assertEqualSQL<Request: FetchRequest>(_ db: Database, _ request: Request, _ sql: String, file: StaticString, line: UInt) throws {
+    func assertEqualSQL(
+        _ db: Database,
+        _ request: some FetchRequest,
+        _ sql: String,
+        file: StaticString = #file,
+        line: UInt = #line)
+    throws
+    {
         try request.makeStatement(db).makeCursor().next()
         assertEqualSQL(lastSQLQuery!, sql, file: file, line: line)
     }
     
+    // Compare SQL strings.
+    func assertEqualSQL(
+        _ db: Database,
+        _ expression: some SQLExpressible,
+        _ sql: String,
+        file: StaticString = #file,
+        line: UInt = #line)
+    throws
+    {
+        let request: SQLRequest<Row> = "SELECT \(expression)"
+        try assertEqualSQL(db, request, "SELECT \(sql)", file: file, line: line)
+    }
+    
     // Compare SQL strings (ignoring leading and trailing white space and semicolons.
-    private func _assertEqualSQL<Request: FetchRequest>(_ databaseReader: DatabaseReader, _ request: Request, _ sql: String, file: StaticString, line: UInt) throws {
+    func assertEqualSQL(
+        _ databaseReader: some DatabaseReader,
+        _ request: some FetchRequest,
+        _ sql: String,
+        file: StaticString = #file,
+        line: UInt = #line)
+    throws
+    {
         try databaseReader.unsafeRead { db in
             try assertEqualSQL(db, request, sql, file: file, line: line)
         }
     }
-    
-    // #file vs. #filePath dance
-    #if compiler(>=5.3)
-    func assertNoError(file: StaticString = #filePath, line: UInt = #line, _ test: () throws -> Void) {
-        _assertNoError(file: file, line: line, test)
-    }
-    
-    func assertDidExecute(sql: String, file: StaticString = #filePath, line: UInt = #line) {
-        _assertDidExecute(sql: sql, file: file, line: line)
-    }
-    
-    func assert(_ record: EncodableRecord, isEncodedIn row: Row, file: StaticString = #filePath, line: UInt = #line) {
-        _assert(record, isEncodedIn: row, file: file, line: line)
-    }
-    
-    // Compare SQL strings (ignoring leading and trailing white space and semicolons.
-    func assertEqualSQL(_ lhs: String, _ rhs: String, file: StaticString = #filePath, line: UInt = #line) {
-        _assertEqualSQL(lhs, rhs, file: file, line: line)
-    }
-    
-    // Compare SQL strings (ignoring leading and trailing white space and semicolons.
-    func assertEqualSQL<Request: FetchRequest>(_ db: Database, _ request: Request, _ sql: String, file: StaticString = #filePath, line: UInt = #line) throws {
-        try _assertEqualSQL(db, request, sql, file: file, line: line)
-    }
-    
-    // Compare SQL strings (ignoring leading and trailing white space and semicolons.
-    func assertEqualSQL<Request: FetchRequest>(_ databaseReader: DatabaseReader, _ request: Request, _ sql: String, file: StaticString = #filePath, line: UInt = #line) throws {
-        try _assertEqualSQL(databaseReader, request, sql, file: file, line: line)
-    }
-    #else
-    func assertNoError(file: StaticString = #file, line: UInt = #line, _ test: () throws -> Void) {
-        _assertNoError(file: file, line: line, test)
-    }
-    
-    func assertDidExecute(sql: String, file: StaticString = #file, line: UInt = #line) {
-        _assertDidExecute(sql: sql, file: file, line: line)
-    }
-    
-    func assert(_ record: EncodableRecord, isEncodedIn row: Row, file: StaticString = #file, line: UInt = #line) {
-        _assert(record, isEncodedIn: row, file: file, line: line)
-    }
-    
-    // Compare SQL strings (ignoring leading and trailing white space and semicolons.
-    func assertEqualSQL(_ lhs: String, _ rhs: String, file: StaticString = #file, line: UInt = #line) {
-        _assertEqualSQL(lhs, rhs, file: file, line: line)
-    }
-    
-    // Compare SQL strings (ignoring leading and trailing white space and semicolons.
-    func assertEqualSQL<Request: FetchRequest>(_ db: Database, _ request: Request, _ sql: String, file: StaticString = #file, line: UInt = #line) throws {
-        try _assertEqualSQL(db, request, sql, file: file, line: line)
-    }
-    
-    // Compare SQL strings (ignoring leading and trailing white space and semicolons.
-    func assertEqualSQL<Request: FetchRequest>(_ databaseReader: DatabaseReader, _ request: Request, _ sql: String, file: StaticString = #file, line: UInt = #line) throws {
-        try _assertEqualSQL(databaseReader, request, sql, file: file, line: line)
-    }
-    #endif
-    
-    func sql<Request: FetchRequest>(_ databaseReader: DatabaseReader, _ request: Request) -> String {
+
+    func sql(
+        _ databaseReader: some DatabaseReader,
+        _ request: some FetchRequest)
+    -> String
+    {
         try! databaseReader.unsafeRead { db in
             try request.makeStatement(db).makeCursor().next()
             return lastSQLQuery!
         }
     }
 }
+
+#if SWIFT_PACKAGE
+let testBundle = Bundle.module
+#else
+let testBundle = Bundle(for: GRDBTestCase.self)
+#endif
 
 extension FetchRequest {
     /// Turn request into a statement
@@ -238,28 +241,36 @@ extension FetchRequest {
 }
 
 /// A type-erased ValueReducer.
-public struct AnyValueReducer<Fetched, Value>: ValueReducer {
-    private var __fetch: (Database) throws -> Fetched
+struct AnyValueReducer<Fetched, Value>: ValueReducer {
+    private var __fetch: @Sendable (Database) throws -> Fetched
     private var __value: (Fetched) -> Value?
     
-    public init(
-        fetch: @escaping (Database) throws -> Fetched,
+    init(
+        fetch: @escaping @Sendable (Database) throws -> Fetched,
         value: @escaping (Fetched) -> Value?)
     {
         self.__fetch = fetch
         self.__value = value
     }
     
-    public func _fetch(_ db: Database) throws -> Fetched {
-        try __fetch(db)
+    func _makeFetcher() -> AnyValueReducerFetcher<Fetched> {
+        AnyValueReducerFetcher(fetch: __fetch)
     }
     
-    public func _value(_ fetched: Fetched) -> Value? {
+    func _value(_ fetched: Fetched) -> Value? {
         __value(fetched)
     }
 }
 
-#if swift(>=5.6) && canImport(_Concurrency)
-// Assume this is correct :-/
-extension XCTestExpectation: @unchecked Sendable { }
-#endif
+/// A type-erased _ValueReducerFetcher.
+struct AnyValueReducerFetcher<Fetched>: _ValueReducerFetcher {
+    private var _fetch: @Sendable (Database) throws -> Fetched
+    
+    init(fetch: @escaping @Sendable (Database) throws -> Fetched) {
+        self._fetch = fetch
+    }
+    
+    func fetch(_ db: Database) throws -> Fetched {
+        try _fetch(db)
+    }
+}
